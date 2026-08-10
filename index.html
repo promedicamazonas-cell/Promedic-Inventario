@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  PROMEDIC · Inventario    v0.2  (partes 1 y 2 de 3)
+  PROMEDIC · Inventario    v0.3  (partes 1 y 2 de 3)
   ============================================================
   Autor:  Ing. Ángel Ybarra Rivas
   Para:   PROMEDIC · Rodríguez de Mendoza, Amazonas, Perú
@@ -21,8 +21,16 @@
     · Si al producto le falta la fecha de vencimiento, la pide justo ahí:
       es el único momento en que tienes la caja en la mano.
 
+  v0.3 — el selector de archivos rechazaba el CSV.
+  El input tenia accept=".csv,text/csv". Android no mira la extension sino
+  el tipo MIME que le puso la app que descargo el archivo (WhatsApp y el
+  chat lo entregan como application/octet-stream o text/plain), asi que el
+  archivo salia DESACTIVADO en la lista: se tocaba y no pasaba nada.
+  Quitado el filtro; ahora se valida por contenido. Se anadio aviso de
+  lectura, control de error y una caja para pegar el CSV como alternativa.
+
   PARTE 3 (siguiente) — reposiciones desde las facturas, consumo aparente
-  y rotación real por producto.
+  y rotacion real por producto.
 
   Por qué el catálogo se IMPORTA y no viene dentro del archivo:
   el inventario cambia. Si estuviera escrito aquí dentro, cada cambio
@@ -197,6 +205,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
+const VERSION = "v0.3";
 const $ = s => document.querySelector(s);
 const num = n => (n || 0).toLocaleString("es-PE", {minimumFractionDigits:2, maximumFractionDigits:2});
 const soles = n => "S/ " + num(n);
@@ -564,6 +573,9 @@ function vistaDatos(){
   const v = $("#vista");
   v.innerHTML =
     '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
+    '<div class="nota" style="margin-top:0"><b>Versión instalada: ' + VERSION + '</b><br>' +
+    'Si esto no dice v0.3 o más, el teléfono usa una copia vieja: recarga la ' +
+    'página, o quítala de la pantalla de inicio y vuelve a añadirla.</div>' +
     '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
     'Cargar de nuevo <b>reemplaza</b> el catálogo entero.</div>' +
@@ -683,7 +695,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.2 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.3 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
