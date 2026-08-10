@@ -117,6 +117,8 @@ h2.sec:first-child{margin-top:0}
 
 .vacio{color:var(--suave);font-size:12.5px;padding:22px 14px;text-align:center;
   border:1px dashed var(--linea);border-radius:14px;line-height:1.6}
+textarea{width:100%;padding:12px;border:1px solid var(--linea);border-radius:13px;
+  font-size:13px;font-family:inherit;background:var(--sup);color:var(--texto);resize:vertical}
 input[type=text],input[type=file],select{width:100%;padding:12px;border:1px solid var(--linea);
   border-radius:13px;font-size:15px;font-family:inherit;background:var(--sup);color:var(--texto)}
 .btn{width:100%;padding:15px;border:none;border-radius:15px;font-size:14.5px;font-weight:750;
@@ -566,19 +568,46 @@ function vistaDatos(){
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
     'Cargar de nuevo <b>reemplaza</b> el catálogo entero.</div>' +
     '<div style="height:12px"></div>' +
-    '<input type="file" id="arch" accept=".csv,text/csv">' +
-    '<div id="info"></div>';
+    '<input type="file" id="arch">' +
+    '<div id="estadoCarga"></div>' +
+    '<div id="info"></div>' +
+    '<h2 class="sec">Si el archivo no se deja elegir</h2>' +
+    '<div class="nota">Algunos teléfonos no dejan seleccionar el CSV. En ese caso ' +
+    'ábrelo, copia todo el texto y pégalo aquí abajo.</div>' +
+    '<div style="height:10px"></div>' +
+    '<textarea id="pegar" rows="4" placeholder="Pega aquí el contenido del CSV"></textarea>' +
+    '<button class="btn sec" id="btnPegar">Cargar lo pegado</button>';
   if(cat.length){
     const tot = cat.reduce((s,p) => s + valor(p), 0);
     $("#info").innerHTML = '<div class="nota"><b>Catálogo actual:</b> ' + cat.length +
       ' productos · ' + soles(tot) + '<br>Cargado el ' +
       (localStorage.getItem("promedic_inv_fecha") || "?") + '</div>';
   }
+  const aviso = (t, mal) => {
+    const c = $("#estadoCarga");
+    if(c) c.innerHTML = '<div class="nota" style="border-color:' +
+      (mal ? "var(--rojo)" : "var(--acento)") + '">' + t + '</div>';
+  };
   $("#arch").onchange = e => {
-    const f = e.target.files[0]; if(!f) return;
+    const f = e.target.files[0];
+    if(!f) return aviso("No se seleccionó ningún archivo.", true);
+    aviso("Leyendo <b>" + f.name + "</b> (" + Math.round(f.size/1024) + " KB)…");
     const l = new FileReader();
-    l.onload = ev => importar(ev.target.result);
+    /* onerror existe porque el navegador puede fallar al leer un archivo que
+       si aparece en la lista (permisos, almacenamiento en la nube sin bajar).
+       Sin esto, el usuario se queda mirando una pantalla que no dice nada. */
+    l.onerror = () => aviso("El teléfono no pudo leer ese archivo. " +
+      "Prueba a descargarlo de nuevo, o usa la opción de pegar el texto.", true);
+    l.onload = ev => {
+      try { importar(ev.target.result); }
+      catch(err){ aviso("Error al procesar: " + err.message, true); }
+    };
     l.readAsText(f, "utf-8");
+  };
+  $("#btnPegar").onclick = () => {
+    const t = $("#pegar").value.trim();
+    if(t.length < 40) return alert("Pega el contenido completo del CSV.");
+    try { importar(t); } catch(err){ aviso("Error al procesar: " + err.message, true); }
   };
 }
 
@@ -605,12 +634,12 @@ function leerCSV(txt){
 function importar(txt){
   let filas;
   try { filas = leerCSV(txt); } catch(e){ return alert("No pude leer el archivo: " + e.message); }
-  if(filas.length < 2) return alert("El archivo está vacío o no tiene el formato esperado.");
+  if(filas.length < 2) return alert("El archivo está vacío o no es un CSV.\n\nSe leyeron " + filas.length + " línea(s).");
   const cab = filas[0].map(x => x.trim());
   const ix = n => cab.indexOf(n);
   const need = ["Id","Producto","Categoria","Costo","Stock","Vencimiento","ABC"];
   const falta = need.filter(n => ix(n) < 0);
-  if(falta.length) return alert("Al archivo le faltan columnas: " + falta.join(", "));
+  if(falta.length) return alert("Al archivo le faltan columnas: " + falta.join(", ") + "\n\nCabecera encontrada:\n" + cab.join(" | "));
 
   const nuevo = [];
   for(let i = 1; i < filas.length; i++){
