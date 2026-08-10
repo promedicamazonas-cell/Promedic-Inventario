@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  PROMEDIC · Inventario    v0.5  (partes 1 y 2 de 3)
+  PROMEDIC · Inventario    v0.6  (partes 1 y 2 de 3)
   ============================================================
   Autor:  Ing. Ángel Ybarra Rivas
   Para:   PROMEDIC · Rodríguez de Mendoza, Amazonas, Perú
@@ -141,6 +141,15 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
   font-size:12.5px;line-height:1.6;color:var(--suave);margin-top:16px}
 .nota b{color:var(--texto)}
 
+/* venta rapida: SOLO clase A */
+.vr{display:flex;gap:7px;margin-top:9px;align-items:center}
+.vr input{flex:1 1 auto;min-width:0;padding:9px 6px;text-align:center;font-size:15px;
+  font-weight:700;border:1px solid var(--linea);border-radius:10px;background:var(--sup2);
+  color:var(--texto)}
+.vr button{flex:0 0 74px;padding:9px 4px;border:none;border-radius:10px;font-family:inherit;
+  font-size:12px;font-weight:750;cursor:pointer;background:var(--rojo);color:#2B0410}
+.vr small{flex:0 0 auto;font-size:10.5px;color:var(--suave)}
+
 /* conteo del dia */
 .cnt{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
   border-radius:13px;padding:12px 13px;margin-bottom:8px}
@@ -210,7 +219,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.5";
+const VERSION = "v0.6";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -283,6 +292,19 @@ function franja(d){
   return null;
 }
 const valor = p => (p.costo || 0) * (p.stock || 0);
+
+/* El stock NO es lo que hay ahora: es lo que habia el dia del conteo.
+   Entre conteo y conteo se queda viejo, y eso es normal — la diferencia
+   es justamente lo que vendiste. Por eso el numero SIEMPRE sale con su
+   fecha: sin ella induce a error, y de hecho ya lo hizo. */
+function textoStock(p){
+  const s = "stock " + (p.stock || 0);
+  if(!p.visto) return s + " · sin contar";
+  const d = desdeConteo(p);
+  if(d === 0) return s + " · contado hoy";
+  if(d === 1) return s + " · contado ayer";
+  return s + " · al " + fmtFecha(p.visto) + " (" + d + " d)";
+}
 const conStock = p => (p.stock || 0) > 0;
 
 function pintarEstado(){
@@ -306,10 +328,10 @@ function filaProd(p, extra){
   div.innerHTML =
     '<div class="txt"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
       p.nom + '</b>' +
-    '<span>' + p.cat + ' · stock ' + (p.stock || 0) + ' · ' + plazo +
+    '<span>' + p.cat + ' · ' + textoStock(p) + ' · ' + plazo +
       (p.aviso ? ' · ⚠ ' + p.aviso : '') + '</span></div>' +
     '<div class="der"><b>' + soles(valor(p)) + '</b><span>' +
-      (extra || (p.venc || "—")) + '</span></div>';
+      (extra || (fmtFecha(p.venc) || "—")) + '</span></div>';
   return div;
 }
 
@@ -398,6 +420,50 @@ function vistaVencer(){
     v.insertAdjacentHTML("beforeend", '<div class="nota">Nada por vencer en los próximos 6 meses.</div>');
 }
 
+/* ---------- VENTA RAPIDA (solo clase A) -------------------------------
+   El metodo no registra ventas: se deducen contando. Pero un Minoderm de
+   S/95 no es un sachet de S/0.25 — ahi una sola venta ya mueve la aguja,
+   y entre conteo y conteo el numero se aleja demasiado.
+
+   Por eso esto existe SOLO para clase A, donde esta el 80% del dinero, y
+   es OPCIONAL: si no lo usas, el siguiente conteo lo corrige igual. No se
+   extiende a B ni a C a proposito — ahi el volumen de ventas es alto, el
+   valor bajo, y acabarias tecleando todo el dia. Eso mata el sistema.
+
+   Lo vendido NO se usa para calcular el consumo aparente (que sigue
+   saliendo de conteo a conteo); solo mantiene el stock mas cerca de la
+   realidad. Asi no hay doble conteo.                                   */
+function ventaRapida(p, cant){
+  const antes = p.stock || 0;
+  p.stock = Math.max(0, antes - cant);
+  p.ventas = p.ventas || [];
+  p.ventas.push({f: hoyISO(), q: cant});
+  if(p.ventas.length > 60) p.ventas = p.ventas.slice(-60);
+  grabar(); pintarEstado();
+  return antes - p.stock;      /* lo realmente descontado */
+}
+
+function controlVenta(p, alHacer){
+  const box = document.createElement("div");
+  box.className = "vr";
+  box.innerHTML = '<small>Vendí</small>' +
+    '<input type="number" inputmode="numeric" min="1" placeholder="cant.">' +
+    '<button>Descontar</button>';
+  const inp = box.querySelector("input");
+  box.querySelector("button").onclick = () => {
+    const c = parseFloat(inp.value);
+    if(isNaN(c) || c <= 0) return alert("Escribe cuántas unidades vendiste.");
+    if(c > (p.stock || 0) &&
+       !confirm("Dice que solo quedan " + (p.stock || 0) + ". ¿Descontar igual y dejarlo en 0?"))
+      return;
+    const d = ventaRapida(p, c);
+    inp.value = "";
+    if(alHacer) alHacer(d);
+  };
+  inp.onkeydown = e => { if(e.key === "Enter") box.querySelector("button").click(); };
+  return box;
+}
+
 function vistaBuscar(){
   const v = $("#vista");
   v.innerHTML = '<h2 class="sec">Buscar producto</h2>' +
@@ -416,7 +482,16 @@ function vistaBuscar(){
     const l = cat.filter(p => norm(p.nom).includes(q)).slice(0, 60);
     if(!l.length){ r.innerHTML = '<div class="vacio">Sin resultados para «' + $("#q").value + '».</div>'; return; }
     r.insertAdjacentHTML("beforeend", '<h2 class="sec">' + l.length + ' resultado(s)</h2>');
-    l.forEach(p => r.appendChild(filaProd(p)));
+    l.forEach(p => {
+      const fila = filaProd(p);
+      r.appendChild(fila);
+      /* solo clase A: es donde una venta suelta cambia el numero de verdad */
+      if(p.abc === "A"){
+        const c = controlVenta(p, () => pintar());
+        c.style.margin = "-4px 0 8px";
+        r.appendChild(c);
+      }
+    });
   };
   $("#q").oninput = pintar;
   pintar();
@@ -433,6 +508,31 @@ const META_DIARIA = 17;
 const CADA = {A:30, B:90, C:180};   /* dias entre conteos, por clase */
 
 const hoyISO = () => new Date().toISOString().slice(0,10);
+
+/* ---------- FECHAS ---------------------------------------------------
+   Dentro se guardan como AAAA-MM-DD (asi se ordenan solas y no hay
+   ambiguedad). A la vista, siempre dd/mm/aaaa. El <input type="date">
+   del sistema se descarto a proposito: muestra el formato del IDIOMA
+   DEL TELEFONO — a Angel le salia mm/dd/yyyy — y eso no se puede
+   cambiar desde la pagina.                                           */
+function fmtFecha(iso){
+  if(!iso) return "";
+  const p = String(iso).split("-");
+  return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : iso;
+}
+/* dd/mm/aaaa -> AAAA-MM-DD. null si no vale. Comprueba que la fecha
+   EXISTA de verdad: 31/02 se rechaza, no se convierte en 03/03. */
+function parseFecha(t){
+  const m = String(t).trim().match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if(!m) return null;
+  let d = +m[1], mes = +m[2], a = +m[3];
+  if(a < 100) a += 2000;
+  if(mes < 1 || mes > 12 || d < 1 || d > 31) return null;
+  const f = new Date(a, mes - 1, d);
+  if(f.getFullYear() !== a || f.getMonth() !== mes - 1 || f.getDate() !== d) return null;
+  const dos = x => String(x).padStart(2, "0");
+  return a + "-" + dos(mes) + "-" + dos(d);
+}
 
 /* dias desde el ultimo conteo. null = nunca se conto */
 function desdeConteo(p){
@@ -519,10 +619,12 @@ function filaConteo(p){
   div.innerHTML =
     '<div class="cab"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
       p.nom + '</b>' +
-    '<div class="esp">sistema<br><b style="font-size:15px">' + (p.stock || 0) + '</b></div></div>' +
+    '<div class="esp">' + (p.visto ? "al " + fmtFecha(p.visto) : "sin contar") +
+      '<br><b style="font-size:15px">' + (p.stock || 0) + '</b></div></div>' +
     '<div class="sub">' + p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) + '</div>' +
     (pideFecha ? '<div class="fecha"><small>⚠ Sin fecha de vencimiento — anótala del envase</small>' +
-      '<input type="date" class="fv"></div>' : '') +
+      '<input type="text" class="fv" inputmode="numeric" placeholder="dd/mm/aaaa" ' +
+      'autocomplete="off"></div>' : '') +
     '<div class="fila">' +
       '<input type="number" inputmode="numeric" class="qty" placeholder="¿cuántos?">' +
       '<button class="sec ig">Igual</button>' +
@@ -534,7 +636,13 @@ function filaConteo(p){
     const val = parseFloat(qty.value);
     if(isNaN(val) || val < 0) return alert("Escribe cuántas unidades hay. Si no hay, escribe 0.");
     const fv = div.querySelector(".fv");
-    registrarConteo(p, val, fv && fv.value ? fv.value : null);
+    let venc = null;
+    if(fv && fv.value.trim()){
+      venc = parseFecha(fv.value);
+      if(!venc) return alert("La fecha no es válida.\n\nEscríbela como dd/mm/aaaa, " +
+                             "por ejemplo 30/06/2028.");
+    }
+    registrarConteo(p, val, venc);
     div.classList.add("ok");
     div.querySelectorAll("input,button").forEach(x => x.disabled = true);
     const dif = val - (p.stockPrev !== undefined ? p.stockPrev : val);
@@ -575,7 +683,7 @@ function mostrarDiferencias(v){
     div.className = "prod";
     div.style.setProperty("--c", d === 0 ? "var(--verde)" : "var(--rojo)");
     div.innerHTML =
-      '<div class="txt"><b>' + p.nom + '</b><span>sistema ' + u.esp +
+      '<div class="txt"><b>' + p.nom + '</b><span>había ' + u.esp +
         ' · contado ' + u.con + '</span></div>' +
       '<div class="der"><b class="dif ' + (d > 0 ? "mas" : d < 0 ? "menos" : "") + '">' +
         (d === 0 ? "exacto" : (d > 0 ? "+" : "") + d) + '</b>' +
@@ -613,7 +721,7 @@ function vistaDatos(){
     '<div id="estadoClave"></div>' +
     '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
     '<div class="nota" style="margin-top:0"><b>Versión instalada: ' + VERSION + '</b><br>' +
-    'Si esto no dice v0.5 o más, el teléfono usa una copia vieja: recarga la ' +
+    'Si esto no dice v0.6 o más, el teléfono usa una copia vieja: recarga la ' +
     'página, o quítala de la pantalla de inicio y vuelve a añadirla.</div>' +
     '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
@@ -750,7 +858,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.5 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.6 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
