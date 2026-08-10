@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<!--
+  PROMEDIC · Inventario    v0.2  (partes 1 y 2 de 3)
+  ============================================================
+  Autor:  Ing. Ángel Ybarra Rivas
+  Para:   PROMEDIC · Rodríguez de Mendoza, Amazonas, Perú
+  Año:    2026
+  Uso personal. Si alguien quiere usarla, que mantenga este crédito.
+  ------------------------------------------------------------
+  PARTE 1 — lo que ya funciona:
+    · Carga el catálogo desde INVENTARIO_CATALOGO.csv (700 productos).
+    · VENCIMIENTOS con semáforo: vencidos, 30, 90 y 180 días.
+    · Buscador de productos.
+    · Resumen: valorización y clasificación ABC.
+
+  PARTE 2 — hecha:
+    · Cola de conteo diaria: ~17 productos, elegidos por clase ABC y por
+      cuánto hace que no se miran. A cada 30 días, B cada 90, C cada 180.
+    · Al contar se guarda la DIFERENCIA contra lo que decía el sistema.
+      Esa diferencia es la medida de las mermas — no se tapa, se mide.
+    · Si al producto le falta la fecha de vencimiento, la pide justo ahí:
+      es el único momento en que tienes la caja en la mano.
+
+  PARTE 3 (siguiente) — reposiciones desde las facturas, consumo aparente
+  y rotación real por producto.
+
+  Por qué el catálogo se IMPORTA y no viene dentro del archivo:
+  el inventario cambia. Si estuviera escrito aquí dentro, cada cambio
+  obligaría a rehacer la app. Importándolo, tú actualizas el CSV y la
+  app lo lee. Es el mismo principio que usamos con los movimientos.
+-->
+<html lang="es" data-tema="oscuro">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0B1120">
+<meta name="author" content="Ing. Ángel Ybarra Rivas">
+<meta name="description" content="Control de inventario de PROMEDIC. Autor: Ing. Ángel Ybarra Rivas.">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>PROMEDIC · Inventario</title>
+<style>
+/* ---- 1) APARIENCIA ---------------------------------------------------
+   Misma familia visual que la app de registro, pero con acento distinto
+   (cian en vez de esmeralda) para que no confundas una con otra.      */
+:root{
+  --fondo:#0B1120; --sup:#141E33; --sup2:#1B2740; --linea:#26344D;
+  --texto:#F1F5F9; --suave:#8FA3BF; --sombra:0 10px 30px rgba(0,0,0,.35);
+  --acento:#06B6D4; --acento2:#22D3EE;
+  --rojo:#F43F5E; --ambar:#F59E0B; --amarillo:#EAB308; --verde:#10B981;
+}
+html[data-tema="claro"]{
+  --fondo:#F4F6FB; --sup:#FFFFFF; --sup2:#F8FAFC; --linea:#E4E9F2;
+  --texto:#0B1120; --suave:#64748B; --sombra:0 8px 24px rgba(15,23,42,.07);
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;padding:0 0 92px;background:var(--fondo);color:var(--texto);
+  font-family:"Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  transition:background .25s,color .25s}
+body::before{content:"";position:fixed;inset:0 0 auto;height:300px;z-index:0;
+  background:radial-gradient(120% 100% at 50% -20%,var(--acento),transparent 70%);
+  opacity:.18;pointer-events:none}
+html[data-tema="claro"] body::before{opacity:.08}
+
+header{position:sticky;top:0;z-index:6;backdrop-filter:blur(14px);
+  background:var(--fondo);border-bottom:1px solid var(--linea);padding:14px 18px;
+  display:flex;align-items:center;justify-content:space-between;gap:10px}
+.marca{display:flex;align-items:center;gap:9px;min-width:0}
+.logo{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--acento),var(--acento2));
+  color:#04121C;font-weight:800;font-size:13px}
+.marca h1{font-size:15px;margin:0;font-weight:650;letter-spacing:-.2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.marca small{display:block;font-size:10.5px;color:var(--suave)}
+.tema{background:var(--sup);border:1px solid var(--linea);color:var(--texto);
+  width:36px;height:36px;border-radius:11px;font-size:15px;cursor:pointer;flex:none}
+
+/* franja de estado: aparte del encabezado, para que nunca se solapen */
+.estado{position:sticky;top:59px;z-index:5;background:var(--sup);
+  border-bottom:1px solid var(--linea);padding:8px 18px;
+  font-size:11.5px;color:var(--suave);text-align:center;line-height:1.5}
+.estado b{color:var(--acento)}
+.estado .mal{color:var(--rojo)}
+
+main{position:relative;z-index:1;padding:18px;max-width:620px;margin:0 auto}
+
+h2.sec{font-size:10.5px;text-transform:uppercase;letter-spacing:1.1px;color:var(--suave);
+  margin:22px 0 10px;font-weight:700}
+h2.sec:first-child{margin-top:0}
+
+/* tarjetas de resumen */
+.kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:6px}
+.kpi{background:var(--sup);border:1px solid var(--linea);border-radius:16px;padding:14px}
+.kpi small{display:block;font-size:10px;color:var(--suave);text-transform:uppercase;
+  letter-spacing:1px;margin-bottom:6px;font-weight:650}
+.kpi b{font-size:20px;font-weight:750;letter-spacing:-.5px;display:block}
+.kpi.alerta{border-color:var(--rojo)}
+.kpi.alerta b{color:var(--rojo)}
+.kpi.aviso{border-color:var(--ambar)}
+.kpi.aviso b{color:var(--ambar)}
+
+/* fila de producto */
+.prod{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
+  border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;gap:10px;
+  justify-content:space-between;align-items:center}
+.prod .txt{min-width:0;font-size:13px;line-height:1.45}
+.prod .txt b{display:block;font-size:13.5px;font-weight:620;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.prod .txt span{color:var(--suave);font-size:11px}
+.prod .der{text-align:right;white-space:nowrap;flex:none}
+.prod .der b{font-size:14px;font-weight:750;display:block}
+.prod .der span{font-size:10.5px;color:var(--suave)}
+.pastilla{font-size:9px;font-weight:800;letter-spacing:.4px;padding:2px 5px;border-radius:5px;
+  margin-right:5px;vertical-align:1px;display:inline-block}
+.abcA{background:#F43F5E;color:#2B0410}
+.abcB{background:#F59E0B;color:#2B1A04}
+.abcC{background:#64748B;color:#0B1120}
+
+.vacio{color:var(--suave);font-size:12.5px;padding:22px 14px;text-align:center;
+  border:1px dashed var(--linea);border-radius:14px;line-height:1.6}
+input[type=text],input[type=file],select{width:100%;padding:12px;border:1px solid var(--linea);
+  border-radius:13px;font-size:15px;font-family:inherit;background:var(--sup);color:var(--texto)}
+.btn{width:100%;padding:15px;border:none;border-radius:15px;font-size:14.5px;font-weight:750;
+  font-family:inherit;cursor:pointer;background:linear-gradient(135deg,var(--acento),var(--acento2));
+  color:#04121C;box-shadow:var(--sombra);margin-top:12px}
+.btn.sec{background:var(--sup);color:var(--texto);border:1px solid var(--linea);box-shadow:none}
+.nota{background:var(--sup);border:1px solid var(--linea);border-radius:14px;padding:14px;
+  font-size:12.5px;line-height:1.6;color:var(--suave);margin-top:16px}
+.nota b{color:var(--texto)}
+
+/* conteo del dia */
+.cnt{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
+  border-radius:13px;padding:12px 13px;margin-bottom:8px}
+.cnt .cab{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.cnt .cab b{font-size:13.5px;font-weight:620;line-height:1.35}
+.cnt .cab .esp{font-size:11px;color:var(--suave);white-space:nowrap;text-align:right;flex:none}
+.cnt .sub{color:var(--suave);font-size:11px;margin-top:3px}
+.cnt .fila{display:flex;gap:8px;margin-top:10px;align-items:center}
+.cnt .fila input{flex:1 1 auto;min-width:0;padding:11px 6px;text-align:center;font-size:17px;
+  font-weight:700;border:1px solid var(--linea);border-radius:11px;background:var(--sup2);
+  color:var(--texto)}
+.cnt .fila button{flex:0 0 78px;padding:11px 4px;border:none;border-radius:11px;font-family:inherit;
+  font-size:13px;font-weight:750;cursor:pointer;
+  background:linear-gradient(135deg,var(--acento),var(--acento2));color:#04121C}
+.cnt .fila button.sec{background:var(--sup2);color:var(--suave);border:1px solid var(--linea);
+  flex:0 0 54px;font-size:11.5px}
+.cnt .fecha{margin-top:8px}
+.cnt .fecha input{width:100%;padding:10px;border:1px solid var(--ambar);border-radius:11px;
+  background:var(--sup2);color:var(--texto);font-family:inherit;font-size:14px}
+.cnt .fecha small{display:block;color:var(--ambar);font-size:11px;margin-bottom:5px;font-weight:650}
+.cnt.ok{opacity:.5;border-left-color:var(--verde)}
+.barra{height:7px;background:var(--sup2);border-radius:99px;overflow:hidden;margin:10px 0 4px}
+.barra i{display:block;height:100%;background:linear-gradient(90deg,var(--acento),var(--acento2))}
+.dif{font-weight:750}
+.dif.mas{color:var(--verde)} .dif.menos{color:var(--rojo)}
+
+/* barra inferior de secciones */
+.nav{position:fixed;left:0;right:0;bottom:0;z-index:7;background:var(--fondo);
+  border-top:1px solid var(--linea);padding:8px 10px calc(8px + env(safe-area-inset-bottom));
+  display:flex;gap:6px;max-width:620px;margin:0 auto}
+.nav button{flex:1;padding:10px 4px;border:none;background:none;color:var(--suave);
+  font-family:inherit;font-size:10.5px;font-weight:650;cursor:pointer;border-radius:12px;
+  display:flex;flex-direction:column;align-items:center;gap:3px}
+.nav button .ic{font-size:17px}
+.nav button.on{color:var(--acento);background:var(--sup)}
+.nav button:disabled{opacity:.35}
+
+footer{text-align:center;padding:24px 16px 6px;color:var(--suave);font-size:11px;line-height:1.8}
+footer b{color:var(--texto);font-weight:650}
+footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid var(--linea);
+  border-radius:999px;font-size:10px;background:var(--sup)}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="marca">
+    <div class="logo">I</div>
+    <div><h1>PROMEDIC</h1><small>Inventario</small></div>
+  </div>
+  <button class="tema" id="btnTema" title="Cambiar tema">☀️</button>
+</header>
+
+<div class="estado" id="estado">Sin catálogo cargado</div>
+
+<main id="vista"></main>
+
+<div class="nav">
+  <button data-v="resumen" class="on"><span class="ic">📊</span>Resumen</button>
+  <button data-v="contar"><span class="ic">✅</span>Contar</button>
+  <button data-v="vencer"><span class="ic">⏳</span>Vencimientos</button>
+  <button data-v="buscar"><span class="ic">🔍</span>Buscar</button>
+  <button data-v="datos"><span class="ic">⚙️</span>Catálogo</button>
+</div>
+
+<script>
+/* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
+
+const $ = s => document.querySelector(s);
+const num = n => (n || 0).toLocaleString("es-PE", {minimumFractionDigits:2, maximumFractionDigits:2});
+const soles = n => "S/ " + num(n);
+
+/* --- tema --- */
+function aplicarTema(t){
+  document.documentElement.dataset.tema = t;
+  $("#btnTema").textContent = t === "oscuro" ? "☀️" : "🌙";
+  try { localStorage.setItem("promedic_inv_tema", t); } catch(e){}
+}
+$("#btnTema").onclick = () =>
+  aplicarTema(document.documentElement.dataset.tema === "oscuro" ? "claro" : "oscuro");
+
+/* --- datos --- */
+let cat = [];                 /* el catálogo completo */
+try { cat = JSON.parse(localStorage.getItem("promedic_inv") || "[]"); } catch(e){ cat = []; }
+function grabar(){
+  try { localStorage.setItem("promedic_inv", JSON.stringify(cat)); return true; }
+  catch(e){
+    alert("No se pudo guardar el catálogo en este teléfono: " + e.message);
+    return false;
+  }
+}
+
+/* Días que faltan para una fecha "AAAA-MM-DD".
+   Se compara a medianoche para que "hoy" sea 0 y no 0.4 de un día. */
+function diasPara(iso){
+  if(!iso) return null;
+  const hoy = new Date(); hoy.setHours(0,0,0,0);
+  const p = iso.split("-");
+  return Math.round((new Date(+p[0], +p[1]-1, +p[2]) - hoy) / 86400000);
+}
+
+/* El semáforo. Los cortes no son caprichosos:
+   <0    ya vencido        → retirar del estante, es sanitario
+   <30   último mes        → liquidar ya
+   <90   tres meses        → aún se puede devolver o promocionar
+   <180  seis meses        → vigilar, no comprar más de eso        */
+function franja(d){
+  if(d === null) return null;
+  if(d < 0)   return {k:"vencido", t:"VENCIDO",  c:"var(--rojo)"};
+  if(d < 30)  return {k:"d30",     t:"< 30 días", c:"var(--rojo)"};
+  if(d < 90)  return {k:"d90",     t:"< 90 días", c:"var(--ambar)"};
+  if(d < 180) return {k:"d180",    t:"< 6 meses", c:"var(--amarillo)"};
+  return null;
+}
+const valor = p => (p.costo || 0) * (p.stock || 0);
+const conStock = p => (p.stock || 0) > 0;
+
+function pintarEstado(){
+  const e = $("#estado");
+  if(!cat.length){ e.innerHTML = "Sin catálogo cargado"; return; }
+  const tot = cat.reduce((s,p) => s + valor(p), 0);
+  const venc = cat.filter(p => conStock(p) && diasPara(p.venc) < 0 && p.venc).length;
+  e.innerHTML = "<b>" + cat.length + "</b> productos · <b>" + soles(tot) + "</b>" +
+    (venc ? ' · <b class="mal">' + venc + "</b> vencidos con stock" : "");
+}
+
+/* ---- vistas ---- */
+function filaProd(p, extra){
+  const d = diasPara(p.venc), f = franja(d);
+  const div = document.createElement("div");
+  div.className = "prod";
+  if(f) div.style.setProperty("--c", f.c);
+  const plazo = p.venc
+    ? (d < 0 ? "venció hace " + (-d) + " d" : (d === 0 ? "vence HOY" : "vence en " + d + " d"))
+    : "sin fecha";
+  div.innerHTML =
+    '<div class="txt"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
+      p.nom + '</b>' +
+    '<span>' + p.cat + ' · stock ' + (p.stock || 0) + ' · ' + plazo +
+      (p.aviso ? ' · ⚠ ' + p.aviso : '') + '</span></div>' +
+    '<div class="der"><b>' + soles(valor(p)) + '</b><span>' +
+      (extra || (p.venc || "—")) + '</span></div>';
+  return div;
+}
+
+function vistaResumen(){
+  const v = $("#vista"); v.innerHTML = "";
+  if(!cat.length) return sinCatalogo(v);
+
+  const tot = cat.reduce((s,p) => s + valor(p), 0);
+  const vencidos = cat.filter(p => conStock(p) && p.venc && diasPara(p.venc) < 0);
+  const d90 = cat.filter(p => { const d = diasPara(p.venc); return conStock(p) && d !== null && d >= 0 && d < 90; });
+  const cero = cat.filter(p => !conStock(p));
+  const vv = a => a.reduce((s,p) => s + valor(p), 0);
+
+  v.innerHTML = '<h2 class="sec">Tu inventario hoy</h2>';
+  const g = document.createElement("div"); g.className = "kpis";
+  const kpi = (t, val, sub, cls) =>
+    '<div class="kpi ' + (cls||"") + '"><small>' + t + '</small><b>' + val + '</b>' +
+    '<span style="font-size:11px;color:var(--suave)">' + sub + '</span></div>';
+  g.innerHTML =
+    kpi("Valorizado", soles(tot), cat.length + " productos") +
+    kpi("Ya vencido", soles(vv(vencidos)), vencidos.length + " con stock", vencidos.length ? "alerta" : "") +
+    kpi("Vence en 90 días", soles(vv(d90)), d90.length + " productos", d90.length ? "aviso" : "") +
+    kpi("Sin stock", cero.length, "productos en cero");
+  v.appendChild(g);
+
+  v.insertAdjacentHTML("beforeend", '<h2 class="sec">Dónde está tu dinero (ABC)</h2>');
+  ["A","B","C"].forEach(k => {
+    const l = cat.filter(p => p.abc === k);
+    const pct = tot ? (100 * vv(l) / tot) : 0;
+    const d = document.createElement("div");
+    d.className = "prod";
+    d.style.setProperty("--c", k === "A" ? "var(--rojo)" : k === "B" ? "var(--ambar)" : "var(--suave)");
+    d.innerHTML =
+      '<div class="txt"><b><span class="pastilla abc' + k + '">' + k + '</span>' +
+        (k === "A" ? "Lo que más importa" : k === "B" ? "Importancia media" : "Cola larga") + '</b>' +
+      '<span>' + l.length + " productos · " + Math.round(100*l.length/cat.length) + '% del catálogo</span></div>' +
+      '<div class="der"><b>' + soles(vv(l)) + '</b><span>' + pct.toFixed(1) + '% del dinero</span></div>';
+    v.appendChild(d);
+  });
+
+  v.insertAdjacentHTML("beforeend",
+    '<div class="nota"><b>Cómo leer esto:</b> la clase A son los productos donde está el 80% ' +
+    'de tu dinero. Son los que hay que contar seguido. La clase C son 200 y pico de productos ' +
+    'que juntos no llegan al 5% — contarlos cada semana sería regalar tu tiempo.</div>');
+}
+
+function vistaVencer(){
+  const v = $("#vista"); v.innerHTML = "";
+  if(!cat.length) return sinCatalogo(v);
+
+  const grupos = [
+    {k:"vencido", t:"Ya vencidos · retirar del estante", n:"Nada vencido con stock. Bien."},
+    {k:"d30",  t:"Vencen este mes", n:"Nada vence en 30 días."},
+    {k:"d90",  t:"Vencen en 90 días · aún se puede devolver o promocionar", n:"Nada en 90 días."},
+    {k:"d180", t:"Vencen en 6 meses · vigilar", n:"Nada en 6 meses."}
+  ];
+  let algo = false;
+  grupos.forEach(g => {
+    const l = cat.filter(p => {
+      if(!conStock(p) || !p.venc) return false;
+      const f = franja(diasPara(p.venc));
+      return f && f.k === g.k;
+    }).sort((a,b) => a.venc.localeCompare(b.venc));
+    const val = l.reduce((s,p) => s + valor(p), 0);
+    v.insertAdjacentHTML("beforeend",
+      '<h2 class="sec">' + g.t + (l.length ? " · " + l.length + " · " + soles(val) : "") + '</h2>');
+    if(!l.length){
+      v.insertAdjacentHTML("beforeend", '<div class="vacio">' + g.n + '</div>');
+    } else {
+      algo = true;
+      l.forEach(p => v.appendChild(filaProd(p)));
+    }
+  });
+
+  const sinF = cat.filter(p => conStock(p) && !p.venc);
+  if(sinF.length){
+    v.insertAdjacentHTML("beforeend",
+      '<h2 class="sec">Sin fecha de vencimiento · ' + sinF.length + '</h2>');
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota">Estos productos tienen stock pero no sabemos cuándo vencen. ' +
+      'Míralos cuando toque contarlos y anota la fecha del envase — hasta entonces, ' +
+      '<b>la app no puede avisarte de ellos</b>.</div>');
+    sinF.forEach(p => v.appendChild(filaProd(p, "sin fecha")));
+  }
+  if(!algo && !sinF.length)
+    v.insertAdjacentHTML("beforeend", '<div class="nota">Nada por vencer en los próximos 6 meses.</div>');
+}
+
+function vistaBuscar(){
+  const v = $("#vista");
+  v.innerHTML = '<h2 class="sec">Buscar producto</h2>' +
+    '<input type="text" id="q" placeholder="Escribe parte del nombre" autocomplete="off">' +
+    '<div id="res"></div>';
+  if(!cat.length){ $("#res").innerHTML = ""; return sinCatalogo($("#res")); }
+  const norm = t => t.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const pintar = () => {
+    const q = norm($("#q").value.trim());
+    const r = $("#res"); r.innerHTML = "";
+    if(q.length < 2){
+      r.innerHTML = '<div class="vacio">Escribe al menos dos letras.<br>' +
+        cat.length + ' productos en el catálogo.</div>';
+      return;
+    }
+    const l = cat.filter(p => norm(p.nom).includes(q)).slice(0, 60);
+    if(!l.length){ r.innerHTML = '<div class="vacio">Sin resultados para «' + $("#q").value + '».</div>'; return; }
+    r.insertAdjacentHTML("beforeend", '<h2 class="sec">' + l.length + ' resultado(s)</h2>');
+    l.forEach(p => r.appendChild(filaProd(p)));
+  };
+  $("#q").oninput = pintar;
+  pintar();
+}
+
+
+/* ---------- PARTE 2: CONTEO CICLICO ----------------------------------
+   El problema real no era falta de disciplina: contar 700 productos de
+   una vez es imposible mientras atiendes. Aqui se cuentan ~17 al dia,
+   elegidos por cuanto dinero representan y por cuanto hace que no se
+   miran. En unas semanas el catalogo entero queda tocado, sin que
+   ningun dia te cueste mas de diez minutos.                          */
+const META_DIARIA = 17;
+const CADA = {A:30, B:90, C:180};   /* dias entre conteos, por clase */
+
+const hoyISO = () => new Date().toISOString().slice(0,10);
+
+/* dias desde el ultimo conteo. null = nunca se conto */
+function desdeConteo(p){
+  if(!p.visto) return null;
+  const h = new Date(); h.setHours(0,0,0,0);
+  const q = p.visto.split("-");
+  return Math.round((h - new Date(+q[0], +q[1]-1, +q[2])) / 86400000);
+}
+/* toca contarlo? nunca contado = si, siempre */
+function toca(p){
+  const d = desdeConteo(p);
+  return d === null || d >= (CADA[p.abc] || 180);
+}
+
+/* La cola del dia.
+   ORDEN: 1) la clase manda — A antes que B antes que C.
+          2) dentro de la clase, lo nunca contado primero.
+          3) despues lo mas atrasado.
+          4) a igualdad, lo que mas dinero vale.
+
+   El punto 1 no es un detalle. La primera version ordenaba solo por dias
+   de atraso, y como la clase C se cuenta cada 180 dias, sus productos
+   acumulaban mas atraso absoluto y se COLABAN delante de la clase A.
+   Resultado: la cola se llenaba de productos que juntos valen S/1,189
+   mientras los de S/18,868 esperaban. Justo al reves de para lo que
+   existe el ABC. Lo cazo una prueba, no la lectura del codigo.
+
+   En regimen normal todo cabe igual: A necesita ~13 conteos al dia,
+   B ~2 y C ~1.3. Total ~17. Nadie se queda fuera; solo se ordena.   */
+const RANGO = {A:0, B:1, C:2};
+function colaHoy(){
+  const pend = cat.filter(toca);
+  pend.sort((a,b) => {
+    const ra = RANGO[a.abc] !== undefined ? RANGO[a.abc] : 3;
+    const rb = RANGO[b.abc] !== undefined ? RANGO[b.abc] : 3;
+    if(ra !== rb) return ra - rb;
+    const da = desdeConteo(a), db = desdeConteo(b);
+    if((da === null) !== (db === null)) return da === null ? -1 : 1;
+    if(da !== null && da !== db) return db - da;
+    return valor(b) - valor(a);
+  });
+  return pend.slice(0, META_DIARIA);
+}
+
+function vistaContar(){
+  const v = $("#vista"); v.innerHTML = "";
+  if(!cat.length) return sinCatalogo(v);
+
+  const hechos = cat.filter(p => p.visto === hoyISO());
+  const cola = colaHoy();
+  const atrasados = cat.filter(toca).length;
+
+  v.insertAdjacentHTML("beforeend", '<h2 class="sec">Conteo de hoy</h2>');
+  const pct = Math.min(100, Math.round(100 * hechos.length / META_DIARIA));
+  v.insertAdjacentHTML("beforeend",
+    '<div class="kpi"><small>Llevas contados hoy</small><b>' + hechos.length + ' de ' +
+    META_DIARIA + '</b><div class="barra"><i style="width:' + pct + '%"></i></div>' +
+    '<span style="font-size:11px;color:var(--suave)">' +
+    (atrasados ? atrasados + ' productos esperan turno' : 'Todo el catálogo al día') +
+    '</span></div>');
+
+  if(!cola.length){
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota" style="margin-top:14px"><b>No toca contar nada más.</b><br>' +
+      'Todo el catálogo está dentro de su plazo: clase A cada 30 días, B cada 90, C cada 180. ' +
+      'Vuelve mañana.</div>');
+    return mostrarDiferencias(v);
+  }
+
+  v.insertAdjacentHTML("beforeend", '<h2 class="sec">Cuenta estos ' + cola.length + '</h2>');
+  cola.forEach(p => v.appendChild(filaConteo(p)));
+  mostrarDiferencias(v);
+}
+
+function filaConteo(p){
+  const d = desdeConteo(p);
+  const div = document.createElement("div");
+  div.className = "cnt";
+  div.style.setProperty("--c", p.abc === "A" ? "var(--rojo)"
+                             : p.abc === "B" ? "var(--ambar)" : "var(--suave)");
+  const cuando = d === null ? "nunca contado" : "hace " + d + " días";
+  const pideFecha = !p.venc;     /* el momento de anotarla es con la caja en la mano */
+
+  div.innerHTML =
+    '<div class="cab"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
+      p.nom + '</b>' +
+    '<div class="esp">sistema<br><b style="font-size:15px">' + (p.stock || 0) + '</b></div></div>' +
+    '<div class="sub">' + p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) + '</div>' +
+    (pideFecha ? '<div class="fecha"><small>⚠ Sin fecha de vencimiento — anótala del envase</small>' +
+      '<input type="date" class="fv"></div>' : '') +
+    '<div class="fila">' +
+      '<input type="number" inputmode="numeric" class="qty" placeholder="¿cuántos?">' +
+      '<button class="sec ig">Igual</button>' +
+      '<button class="gu">Guardar</button>' +
+    '</div>';
+
+  const qty = div.querySelector(".qty");
+  const guardar = () => {
+    const val = parseFloat(qty.value);
+    if(isNaN(val) || val < 0) return alert("Escribe cuántas unidades hay. Si no hay, escribe 0.");
+    const fv = div.querySelector(".fv");
+    registrarConteo(p, val, fv && fv.value ? fv.value : null);
+    div.classList.add("ok");
+    div.querySelectorAll("input,button").forEach(x => x.disabled = true);
+    const dif = val - (p.stockPrev !== undefined ? p.stockPrev : val);
+    setTimeout(() => vistaContar(), 450);
+  };
+  div.querySelector(".gu").onclick = guardar;
+  div.querySelector(".ig").onclick = () => { qty.value = p.stock || 0; guardar(); };
+  qty.onkeydown = e => { if(e.key === "Enter") guardar(); };
+  return div;
+}
+
+/* Guarda el conteo. La diferencia contra lo que decia el sistema NO se
+   descarta: es la medida de tus mermas, y ese numero hoy no lo tienes.  */
+function registrarConteo(p, contado, fechaVenc){
+  const esperado = p.stock || 0;
+  p.hist = p.hist || [];
+  p.hist.push({f: hoyISO(), esp: esperado, con: contado});
+  if(p.hist.length > 24) p.hist = p.hist.slice(-24);   /* no crecer sin limite */
+  p.stockPrev = esperado;
+  p.stock = contado;
+  p.visto = hoyISO();
+  if(fechaVenc) p.venc = fechaVenc;
+  grabar();
+  pintarEstado();
+}
+
+/* Lo contado hoy, con su diferencia en unidades y en soles. */
+function mostrarDiferencias(v){
+  const hechos = cat.filter(p => p.visto === hoyISO() && p.hist && p.hist.length);
+  if(!hechos.length) return;
+  v.insertAdjacentHTML("beforeend", '<h2 class="sec">Contados hoy · ' + hechos.length + '</h2>');
+  let dif = 0;
+  hechos.forEach(p => {
+    const u = p.hist[p.hist.length - 1];
+    const d = u.con - u.esp;
+    dif += d * (p.costo || 0);
+    const div = document.createElement("div");
+    div.className = "prod";
+    div.style.setProperty("--c", d === 0 ? "var(--verde)" : "var(--rojo)");
+    div.innerHTML =
+      '<div class="txt"><b>' + p.nom + '</b><span>sistema ' + u.esp +
+        ' · contado ' + u.con + '</span></div>' +
+      '<div class="der"><b class="dif ' + (d > 0 ? "mas" : d < 0 ? "menos" : "") + '">' +
+        (d === 0 ? "exacto" : (d > 0 ? "+" : "") + d) + '</b>' +
+        '<span>' + (d === 0 ? "" : soles(Math.abs(d * (p.costo || 0)))) + '</span></div>';
+    v.appendChild(div);
+  });
+  if(dif !== 0){
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota"><b>Diferencia de hoy: ' + (dif > 0 ? "+" : "") + soles(dif) + '</b><br>' +
+      (dif < 0
+        ? 'Falta mercadería que el sistema creía tener. Puede ser merma, robo, o ventas ' +
+          'que no se descontaron. No se corrige solo: se mide y se vigila.'
+        : 'Hay más de lo que el sistema creía. Suele ser mercadería que entró sin registrarse.') +
+      '</div>');
+  }
+}
+
+function sinCatalogo(donde){
+  donde.insertAdjacentHTML("beforeend",
+    '<div class="vacio">Todavía no has cargado el catálogo.<br>' +
+    'Ve a <b>Catálogo</b> y carga el archivo <b>INVENTARIO_CATALOGO.csv</b>.</div>');
+}
+
+function vistaDatos(){
+  const v = $("#vista");
+  v.innerHTML =
+    '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
+    '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
+    '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
+    'Cargar de nuevo <b>reemplaza</b> el catálogo entero.</div>' +
+    '<div style="height:12px"></div>' +
+    '<input type="file" id="arch" accept=".csv,text/csv">' +
+    '<div id="info"></div>';
+  if(cat.length){
+    const tot = cat.reduce((s,p) => s + valor(p), 0);
+    $("#info").innerHTML = '<div class="nota"><b>Catálogo actual:</b> ' + cat.length +
+      ' productos · ' + soles(tot) + '<br>Cargado el ' +
+      (localStorage.getItem("promedic_inv_fecha") || "?") + '</div>';
+  }
+  $("#arch").onchange = e => {
+    const f = e.target.files[0]; if(!f) return;
+    const l = new FileReader();
+    l.onload = ev => importar(ev.target.result);
+    l.readAsText(f, "utf-8");
+  };
+}
+
+/* Lector de CSV con comillas. No uso split(",") a secas porque los nombres
+   de producto traen comas dentro ("LECHE 1L, X 2") y partirían la fila. */
+function leerCSV(txt){
+  txt = txt.replace(/^﻿/, "");
+  const filas = []; let f = [], campo = "", dentro = false;
+  for(let i = 0; i < txt.length; i++){
+    const c = txt[i];
+    if(dentro){
+      if(c === '"' && txt[i+1] === '"'){ campo += '"'; i++; }
+      else if(c === '"') dentro = false;
+      else campo += c;
+    } else if(c === '"') dentro = true;
+    else if(c === ","){ f.push(campo); campo = ""; }
+    else if(c === "\n"){ f.push(campo); filas.push(f); f = []; campo = ""; }
+    else if(c !== "\r") campo += c;
+  }
+  if(campo !== "" || f.length){ f.push(campo); filas.push(f); }
+  return filas.filter(x => x.length > 1);
+}
+
+function importar(txt){
+  let filas;
+  try { filas = leerCSV(txt); } catch(e){ return alert("No pude leer el archivo: " + e.message); }
+  if(filas.length < 2) return alert("El archivo está vacío o no tiene el formato esperado.");
+  const cab = filas[0].map(x => x.trim());
+  const ix = n => cab.indexOf(n);
+  const need = ["Id","Producto","Categoria","Costo","Stock","Vencimiento","ABC"];
+  const falta = need.filter(n => ix(n) < 0);
+  if(falta.length) return alert("Al archivo le faltan columnas: " + falta.join(", "));
+
+  const nuevo = [];
+  for(let i = 1; i < filas.length; i++){
+    const r = filas[i];
+    if(!r[ix("Producto")]) continue;
+    nuevo.push({
+      id: r[ix("Id")], nom: r[ix("Producto")], cat: r[ix("Categoria")],
+      costo: parseFloat(r[ix("Costo")]) || 0,
+      stock: parseFloat(r[ix("Stock")]) || 0,
+      venc: (r[ix("Vencimiento")] || "").trim(),
+      abc: (r[ix("ABC")] || "C").trim(),
+      aviso: ix("Aviso") >= 0 ? (r[ix("Aviso")] || "").trim() : ""
+    });
+  }
+  if(!nuevo.length) return alert("No encontré productos en el archivo.");
+  cat = nuevo;
+  if(!grabar()) return;
+  try { localStorage.setItem("promedic_inv_fecha", new Date().toISOString().slice(0,10)); } catch(e){}
+  pintarEstado();
+  alert("Catálogo cargado: " + cat.length + " productos.");
+  ir("resumen");
+}
+
+/* ---- navegación ---- */
+const VISTAS = {resumen:vistaResumen, contar:vistaContar, vencer:vistaVencer,
+                buscar:vistaBuscar, datos:vistaDatos};
+function ir(v){
+  document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  VISTAS[v]();
+  window.scrollTo(0, 0);
+}
+document.querySelectorAll(".nav button").forEach(b => b.onclick = () => ir(b.dataset.v));
+
+/* ---- arranque ---- */
+try { aplicarTema(localStorage.getItem("promedic_inv_tema") || "oscuro"); }
+catch(e){ aplicarTema("oscuro"); }
+pintarEstado();
+ir(cat.length ? "resumen" : "datos");
+</script>
+
+<footer>
+  Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
+  PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
+  <span class="v">Inventario v0.2 · partes 1 y 2 de 3</span>
+</footer>
+</body>
+</html>
