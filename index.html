@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  PROMEDIC · Inventario    v0.3  (partes 1 y 2 de 3)
+  PROMEDIC · Inventario    v0.4  (partes 1 y 2 de 3)
   ============================================================
   Autor:  Ing. Ángel Ybarra Rivas
   Para:   PROMEDIC · Rodríguez de Mendoza, Amazonas, Perú
@@ -28,6 +28,10 @@
   archivo salia DESACTIVADO en la lista: se tocaba y no pasaba nada.
   Quitado el filtro; ahora se valida por contenido. Se anadio aviso de
   lectura, control de error y una caja para pegar el CSV como alternativa.
+
+  v0.4 — sin accept, Android abria el menu "elige una accion" con Camara y
+  Grabadora, sin explorador de archivos. accept="*/*" es el punto medio:
+  Chrome abre el explorador y no desactiva ningun archivo por su tipo.
 
   PARTE 3 (siguiente) — reposiciones desde las facturas, consumo aparente
   y rotacion real por producto.
@@ -205,7 +209,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.3";
+const VERSION = "v0.4";
 const $ = s => document.querySelector(s);
 const num = n => (n || 0).toLocaleString("es-PE", {minimumFractionDigits:2, maximumFractionDigits:2});
 const soles = n => "S/ " + num(n);
@@ -574,18 +578,20 @@ function vistaDatos(){
   v.innerHTML =
     '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
     '<div class="nota" style="margin-top:0"><b>Versión instalada: ' + VERSION + '</b><br>' +
-    'Si esto no dice v0.3 o más, el teléfono usa una copia vieja: recarga la ' +
+    'Si esto no dice v0.4 o más, el teléfono usa una copia vieja: recarga la ' +
     'página, o quítala de la pantalla de inicio y vuelve a añadirla.</div>' +
     '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
     'Cargar de nuevo <b>reemplaza</b> el catálogo entero.</div>' +
     '<div style="height:12px"></div>' +
-    '<input type="file" id="arch">' +
+    '<input type="file" id="arch" accept="*/*">' +
     '<div id="estadoCarga"></div>' +
     '<div id="info"></div>' +
-    '<h2 class="sec">Si el archivo no se deja elegir</h2>' +
-    '<div class="nota">Algunos teléfonos no dejan seleccionar el CSV. En ese caso ' +
-    'ábrelo, copia todo el texto y pégalo aquí abajo.</div>' +
+    '<h2 class="sec">Si el teléfono no te deja elegirlo</h2>' +
+    '<div class="nota">Si al pulsar sale un menú con <b>Cámara</b> y <b>Grabadora</b>, ' +
+    'desliza ese menú hacia los lados: suele haber un icono de <b>Archivos</b> o ' +
+    '<b>Mis archivos</b> más allá. Si aun así no aparece, abre el CSV con cualquier ' +
+    'app de texto, copia todo y pégalo aquí abajo.</div>' +
     '<div style="height:10px"></div>' +
     '<textarea id="pegar" rows="4" placeholder="Pega aquí el contenido del CSV"></textarea>' +
     '<button class="btn sec" id="btnPegar">Cargar lo pegado</button>';
@@ -695,7 +701,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.3 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.4 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
