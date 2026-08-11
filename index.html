@@ -251,7 +251,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.9";
+const VERSION = "v0.10";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -790,13 +790,52 @@ function fmtFecha(iso){
   const p = String(iso).split("-");
   return p.length === 3 ? p[2] + "/" + p[1] + "/" + p[0] : iso;
 }
+/* Pone las barras solo mientras el teclea. El teclado numerico del
+   telefono no trae "/" a la vista, asi que escribir la fecha obligaba a
+   cambiar de teclado tres veces por producto. Tecleando 30062028 sale
+   30/06/2028.
+
+   Dos cuidados que parecen detalle y no lo son:
+   - NO se agrega la barra final ("30/"). Si se agregara, el borrar se
+     traba: borras la barra y la mascara la vuelve a poner.
+   - El cursor solo se manda al final si ya estaba al final. Si el esta
+     corrigiendo el mes en medio del texto, se queda donde estaba.        */
+function mascaraFecha(inp){
+  inp.maxLength = 10;
+  inp.oninput = () => {
+    const alFinal = inp.selectionStart === inp.value.length;
+    const d = inp.value.replace(/\D/g, "").slice(0, 8);
+    let t = d.slice(0, 2);
+    if(d.length > 2) t += "/" + d.slice(2, 4);
+    if(d.length > 4) t += "/" + d.slice(4, 8);
+    if(t !== inp.value){
+      inp.value = t;
+      if(alFinal) inp.setSelectionRange(t.length, t.length);
+    }
+    inp.style.borderColor = "";
+    /* Solo avisa: en rojo si esa fecha no existe (31/02, por ejemplo).
+       NO se mueve el foco solo al completar las 8 cifras, aunque ahorraria
+       un toque: si el se equivoca en el ano y le da a borrar, el borrado se
+       lo come el campo de al lado y termina corrigiendo la cantidad sin
+       darse cuenta. En el campo del que dependen todas las alertas de
+       vencimiento, eso no se arriesga por un toque. */
+    if(d.length === 8 && !parseFecha(t)) inp.style.borderColor = "var(--rojo)";
+  };
+}
+
 /* dd/mm/aaaa -> AAAA-MM-DD. null si no vale. Comprueba que la fecha
-   EXISTA de verdad: 31/02 se rechaza, no se convierte en 03/03. */
+   EXISTA de verdad: 31/02 se rechaza, no se convierte en 03/03.
+
+   El ano va de 2 o 4 cifras, NUNCA de 3. Aceptaba 3 y "30/06/202" pasaba
+   como el ano 202: guardaba venc="202-06-30" y a partir de ahi el producto
+   quedaba vencido hace 1800 anos, sin que nada avisara. Aparecio al probar
+   la mascara, tecleando y borrando una cifra. */
 function parseFecha(t){
-  const m = String(t).trim().match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  const m = String(t).trim().match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2}|\d{4})$/);
   if(!m) return null;
   let d = +m[1], mes = +m[2], a = +m[3];
   if(a < 100) a += 2000;
+  if(a < 1900 || a > 2200) return null;
   if(mes < 1 || mes > 12 || d < 1 || d > 31) return null;
   const f = new Date(a, mes - 1, d);
   if(f.getFullYear() !== a || f.getMonth() !== mes - 1 || f.getDate() !== d) return null;
@@ -902,6 +941,8 @@ function filaConteo(p){
     '</div>';
 
   const qty = div.querySelector(".qty");
+  const fvi = div.querySelector(".fv");
+  if(fvi) mascaraFecha(fvi);
   const guardar = () => {
     const val = parseFloat(qty.value);
     if(isNaN(val) || val < 0) return alert("Escribe cuántas unidades hay. Si no hay, escribe 0.");
@@ -1138,7 +1179,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.9 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.10 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
