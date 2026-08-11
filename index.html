@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  PROMEDIC · Inventario    v0.6  (partes 1 y 2 de 3)
+  PROMEDIC · Inventario    v0.7  (partes 1 y 2 de 3)
   ============================================================
   Autor:  Ing. Ángel Ybarra Rivas
   Para:   PROMEDIC · Rodríguez de Mendoza, Amazonas, Perú
@@ -141,6 +141,14 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
   font-size:12.5px;line-height:1.6;color:var(--suave);margin-top:16px}
 .nota b{color:var(--texto)}
 
+/* buscador con X para limpiar */
+.busca{position:relative}
+.busca input{padding-right:44px}
+.busca button{position:absolute;right:6px;top:50%;transform:translateY(-50%);display:none;
+  width:32px;height:32px;border-radius:9px;border:none;background:var(--sup2);
+  color:var(--suave);font-size:19px;line-height:1;cursor:pointer;font-family:inherit}
+.busca button:active{background:var(--linea)}
+
 /* venta rapida: SOLO clase A */
 .vr{display:flex;gap:7px;margin-top:9px;align-items:center}
 .vr input{flex:1 1 auto;min-width:0;padding:9px 6px;text-align:center;font-size:15px;
@@ -149,6 +157,25 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
 .vr button{flex:0 0 74px;padding:9px 4px;border:none;border-radius:10px;font-family:inherit;
   font-size:12px;font-weight:750;cursor:pointer;background:var(--rojo);color:#2B0410}
 .vr small{flex:0 0 auto;font-size:10.5px;color:var(--suave)}
+
+/* retiro de vencidos: uno por uno, con confirmacion */
+.ret{display:flex;gap:7px;margin-top:9px;align-items:center}
+.ret button{flex:1 1 auto;padding:10px 6px;border-radius:10px;font-family:inherit;
+  font-size:12.5px;font-weight:750;cursor:pointer;border:1px solid var(--rojo);
+  background:transparent;color:var(--rojo)}
+.ret button:active{background:var(--rojo);color:#2B0410}
+.ret button.des{border-color:var(--linea);color:var(--suave)}
+.ret button.des:active{background:var(--linea);color:var(--texto)}
+.barra{background:var(--sup);border:1px solid var(--linea);border-radius:14px;
+  padding:13px 14px;margin-bottom:10px}
+.barra .lin{display:flex;justify-content:space-between;font-size:12.5px;
+  color:var(--suave);margin-bottom:9px}
+.barra .lin b{color:var(--texto);font-size:13.5px}
+.barra .riel{height:8px;background:var(--sup2);border-radius:5px;overflow:hidden}
+.barra .riel i{display:block;height:100%;background:var(--verde);border-radius:5px;
+  transition:width .25s}
+.hecho{opacity:.62}
+.hecho .der b{color:var(--verde)}
 
 /* conteo del dia */
 .cnt{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
@@ -219,7 +246,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.6";
+const VERSION = "v0.8";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -267,6 +294,64 @@ function grabar(){
     alert("No se pudo guardar el catálogo en este teléfono: " + e.message);
     return false;
   }
+}
+
+/* ---- BAJAS ----------------------------------------------------------
+   Retirar un vencido NO borra el producto: le pone stock 0 y deja
+   constancia aqui. El producto sigue existiendo porque lo que se acabo
+   es ese lote, no el producto; si lo borraramos, la proxima compra
+   entraria como producto nuevo y se perderia el historico.
+
+   Se guarda aparte del catalogo a proposito: asi sobrevive a una
+   recarga del CSV, que reemplaza el catalogo entero. Es tambien el
+   acta que hace falta para el traspaso: que se retiro, cuando, cuanto
+   valia y por que.                                                     */
+let bajas = [];
+try { bajas = JSON.parse(localStorage.getItem("promedic_inv_bajas") || "[]"); } catch(e){ bajas = []; }
+function grabarBajas(){
+  try { localStorage.setItem("promedic_inv_bajas", JSON.stringify(bajas)); return true; }
+  catch(e){ alert("No se pudo guardar el registro de retiros: " + e.message); return false; }
+}
+const bajaDe = id => bajas.find(b => b.id === id && !b.deshecha);
+
+/* Retira UN producto. Nunca varios: el se lo pidio asi, y tiene razon —
+   un boton que vacia 24 productos de golpe es un boton que algun dia se
+   toca sin querer. */
+function retirar(p, motivo){
+  const q = p.stock || 0;
+  bajas.push({id:p.id, nom:p.nom, cat:p.cat, q:q, costo:p.costo || 0,
+              valor:+(q * (p.costo || 0)).toFixed(2), venc:p.venc,
+              motivo:motivo || "vencido", f:hoyISO(),
+              h:new Date().toTimeString().slice(0,5)});
+  p.stock = 0;
+  grabar(); grabarBajas(); pintarEstado();
+}
+
+/* Deshacer: devuelve el stock exacto que tenia. Existe porque el paso
+   fisico y el digital no siempre ocurren en el mismo minuto. */
+function deshacerBaja(b){
+  const p = cat.find(x => x.id === b.id);
+  if(p) p.stock = (p.stock || 0) + b.q;
+  b.deshecha = true;
+  grabar(); grabarBajas(); pintarEstado();
+}
+
+function actaCSV(){
+  const esc = t => '"' + String(t == null ? "" : t).replace(/"/g, '""') + '"';
+  const l = ["Fecha,Hora,Producto,Id,Categoria,Motivo,Unidades,Costo unitario,Valor retirado,Vencimiento"];
+  bajas.filter(b => !b.deshecha).forEach(b => l.push([b.f, b.h, esc(b.nom), esc(b.id), esc(b.cat),
+    b.motivo, b.q, (b.costo || 0).toFixed(4), (b.valor || 0).toFixed(2), b.venc || ""].join(",")));
+  return l.join("\r\n");
+}
+
+function bajarActa(){
+  const vivas = bajas.filter(b => !b.deshecha);
+  if(!vivas.length) return alert("Todavia no has retirado nada.");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + actaCSV()], {type:"text/csv;charset=utf-8"}));
+  a.download = "acta_retiro_" + hoyISO() + ".csv";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 /* Días que faltan para una fecha "AAAA-MM-DD".
@@ -382,13 +467,105 @@ function vistaVencer(){
   const v = $("#vista"); v.innerHTML = "";
   if(!cat.length) return sinCatalogo(v);
 
+  /* --- retiro de vencidos: barra de avance + uno por uno --- */
+  const vencidos = cat.filter(p => conStock(p) && p.venc && diasPara(p.venc) < 0);
+  const retirados = bajas.filter(b => !b.deshecha && b.motivo === "vencido");
+  const valVenc = vencidos.reduce((s,p) => s + valor(p), 0);
+  const valRet  = retirados.reduce((s,b) => s + (b.valor || 0), 0);
+  const totalN  = vencidos.length + retirados.length;
+
+  if(totalN){
+    const pct = totalN ? Math.round(100 * retirados.length / totalN) : 0;
+    v.insertAdjacentHTML("beforeend",
+      '<div class="barra">' +
+        '<div class="lin"><span>Retirados <b>' + retirados.length + '</b> de <b>' + totalN + '</b></span>' +
+        '<span><b>' + soles(valRet) + '</b> fuera del inventario</span></div>' +
+        '<div class="riel"><i style="width:' + pct + '%"></i></div>' +
+      '</div>');
+  }
+
+  /* --- ya vencidos, pendientes de retirar --- */
+  v.insertAdjacentHTML("beforeend",
+    '<h2 class="sec">Ya vencidos · retirar del estante' +
+    (vencidos.length ? " · " + vencidos.length + " · " + soles(valVenc) : "") + '</h2>');
+
+  if(!vencidos.length){
+    v.insertAdjacentHTML("beforeend",
+      '<div class="vacio">' + (retirados.length
+        ? "Todo lo vencido ya está retirado. " + soles(valRet) + " fuera del inventario."
+        : "Nada vencido con stock. Bien.") + '</div>');
+  } else {
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota">Marca cada uno <b>solo cuando ya lo tengas fuera del estante</b>. ' +
+      'No borra el producto: le pone stock 0 y queda constancia de qué retiraste, ' +
+      'cuándo y cuánto valía. Si te equivocas, puedes deshacerlo abajo.</div>');
+    /* el más caro primero: si el día se corta a la mitad, que lo hecho sea lo que pesa */
+    vencidos.sort((a,b) => valor(b) - valor(a)).forEach(pr => {
+      const fila = filaProd(pr);
+      const box = document.createElement("div");
+      box.className = "ret";
+      const bt = document.createElement("button");
+      bt.textContent = "Ya lo retiré del estante";
+      bt.onclick = () => {
+        if(!confirm("¿Confirmas que YA sacaste del estante?\n\n" + pr.nom +
+                    "\n\n" + (pr.stock || 0) + " unidades · " + soles(valor(pr)) +
+                    "\n\nQueda en stock 0 y se anota en el acta de retiro."))
+          return;
+        retirar(pr, "vencido");
+        vistaVencer();
+      };
+      box.appendChild(bt);
+      fila.style.flexWrap = "wrap";
+      fila.appendChild(box);
+      box.style.flexBasis = "100%";
+      v.appendChild(fila);
+    });
+  }
+
+  /* --- lo ya retirado, con deshacer --- */
+  if(retirados.length){
+    v.insertAdjacentHTML("beforeend",
+      '<h2 class="sec">Retirados · ' + retirados.length + ' · ' + soles(valRet) + '</h2>');
+    retirados.slice().reverse().forEach(b => {
+      const div = document.createElement("div");
+      div.className = "prod hecho";
+      div.style.setProperty("--c", "var(--verde)");
+      div.style.flexWrap = "wrap";
+      div.innerHTML =
+        '<div class="txt"><b>✓ ' + b.nom + '</b><span>' + b.cat + ' · ' + b.q +
+        ' und · retirado el ' + fmtFecha(b.f) + (b.h ? " a las " + b.h : "") + '</span></div>' +
+        '<div class="der"><b>' + soles(b.valor || 0) + '</b><span>fuera</span></div>';
+      const box = document.createElement("div");
+      box.className = "ret"; box.style.flexBasis = "100%";
+      const bt = document.createElement("button");
+      bt.className = "des";
+      bt.textContent = "Deshacer · devolver " + b.q + " al stock";
+      bt.onclick = () => {
+        if(!confirm("¿Devolver " + b.q + " unidades de\n\n" + b.nom +
+                    "\n\nal stock? Se quita del acta de retiro.")) return;
+        deshacerBaja(b);
+        vistaVencer();
+      };
+      box.appendChild(bt);
+      div.appendChild(box);
+      v.appendChild(div);
+    });
+    const btn = document.createElement("button");
+    btn.className = "btn sec";
+    btn.textContent = "Descargar el acta de retiro (CSV)";
+    btn.onclick = bajarActa;
+    v.appendChild(btn);
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota">El acta es lo que hace <b>demostrable</b> la merma el día del ' +
+      'traspaso: fecha, producto, unidades y valor. Guárdala en la carpeta del negocio.</div>');
+  }
+
+  /* --- los que todavía no vencen --- */
   const grupos = [
-    {k:"vencido", t:"Ya vencidos · retirar del estante", n:"Nada vencido con stock. Bien."},
     {k:"d30",  t:"Vencen este mes", n:"Nada vence en 30 días."},
     {k:"d90",  t:"Vencen en 90 días · aún se puede devolver o promocionar", n:"Nada en 90 días."},
     {k:"d180", t:"Vencen en 6 meses · vigilar", n:"Nada en 6 meses."}
   ];
-  let algo = false;
   grupos.forEach(g => {
     const l = cat.filter(p => {
       if(!conStock(p) || !p.venc) return false;
@@ -398,12 +575,8 @@ function vistaVencer(){
     const val = l.reduce((s,p) => s + valor(p), 0);
     v.insertAdjacentHTML("beforeend",
       '<h2 class="sec">' + g.t + (l.length ? " · " + l.length + " · " + soles(val) : "") + '</h2>');
-    if(!l.length){
-      v.insertAdjacentHTML("beforeend", '<div class="vacio">' + g.n + '</div>');
-    } else {
-      algo = true;
-      l.forEach(p => v.appendChild(filaProd(p)));
-    }
+    if(!l.length) v.insertAdjacentHTML("beforeend", '<div class="vacio">' + g.n + '</div>');
+    else l.forEach(p => v.appendChild(filaProd(p)));
   });
 
   const sinF = cat.filter(p => conStock(p) && !p.venc);
@@ -416,8 +589,6 @@ function vistaVencer(){
       '<b>la app no puede avisarte de ellos</b>.</div>');
     sinF.forEach(p => v.appendChild(filaProd(p, "sin fecha")));
   }
-  if(!algo && !sinF.length)
-    v.insertAdjacentHTML("beforeend", '<div class="nota">Nada por vencer en los próximos 6 meses.</div>');
 }
 
 /* ---------- VENTA RAPIDA (solo clase A) -------------------------------
@@ -467,7 +638,8 @@ function controlVenta(p, alHacer){
 function vistaBuscar(){
   const v = $("#vista");
   v.innerHTML = '<h2 class="sec">Buscar producto</h2>' +
-    '<input type="text" id="q" placeholder="Escribe parte del nombre" autocomplete="off">' +
+    '<div class="busca"><input type="text" id="q" placeholder="Escribe parte del nombre" ' +
+    'autocomplete="off"><button id="limpiaQ" title="Borrar">×</button></div>' +
     '<div id="res"></div>';
   if(!cat.length){ $("#res").innerHTML = ""; return sinCatalogo($("#res")); }
   const norm = t => t.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
@@ -493,7 +665,13 @@ function vistaBuscar(){
       }
     });
   };
-  $("#q").oninput = pintar;
+  $("#q").oninput = () => { $("#limpiaQ").style.display = $("#q").value ? "block" : "none"; pintar(); };
+  $("#limpiaQ").onclick = () => {
+    $("#q").value = "";
+    $("#limpiaQ").style.display = "none";
+    pintar();
+    $("#q").focus();
+  };
   pintar();
 }
 
@@ -715,13 +893,13 @@ function vistaDatos(){
     'Escribe tu clave una vez y queda descifrado en este teléfono.<br><br>' +
     'Quien abra esta dirección sin la clave no ve nada: ni productos, ni costos, ni stock.</div>' +
     '<div style="height:10px"></div>' +
-    '<input type="text" id="clave" placeholder="RXD3-PKQM-…" autocomplete="off" ' +
+    '<input type="text" id="clave" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" ' +
     'autocapitalize="characters" spellcheck="false">' +
     '<button class="btn" id="btnClave">Descifrar catálogo</button>' +
     '<div id="estadoClave"></div>' +
     '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
     '<div class="nota" style="margin-top:0"><b>Versión instalada: ' + VERSION + '</b><br>' +
-    'Si esto no dice v0.6 o más, el teléfono usa una copia vieja: recarga la ' +
+    'Si esto no dice v0.7 o más, el teléfono usa una copia vieja: recarga la ' +
     'página, o quítala de la pantalla de inicio y vuelve a añadirla.</div>' +
     '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
@@ -831,10 +1009,20 @@ function importar(txt){
   }
   if(!nuevo.length) return alert("No encontré productos en el archivo.");
   cat = nuevo;
+  /* El CSV trae el stock del dia que se exporto, o sea ANTES de los retiros.
+     Sin esto, recargar el catalogo resucitaria mercaderia vencida que el ya
+     saco del estante — el peor error posible en una farmacia. */
+  let revividos = 0;
+  bajas.filter(b => !b.deshecha).forEach(b => {
+    const p = cat.find(x => x.id === b.id);
+    if(p && (p.stock || 0) > 0){ p.stock = 0; revividos++; }
+  });
   if(!grabar()) return;
   try { localStorage.setItem("promedic_inv_fecha", new Date().toISOString().slice(0,10)); } catch(e){}
   pintarEstado();
-  alert("Catálogo cargado: " + cat.length + " productos.");
+  alert("Catálogo cargado: " + cat.length + " productos." +
+        (revividos ? "\n\n" + revividos + " producto(s) que ya habías retirado se " +
+         "volvieron a poner en 0: el archivo traía el stock de antes del retiro." : ""));
   ir("resumen");
 }
 
@@ -858,7 +1046,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.6 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.8 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
