@@ -180,6 +180,15 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
 .hecho{opacity:.62}
 .hecho .der b{color:var(--verde)}
 
+/* de que lote estamos hablando */
+.lote{display:flex;justify-content:space-between;align-items:center;gap:8px;
+  margin:-3px -4px 8px;padding:5px 9px;border-radius:9px;
+  background:var(--sup2);border:1px solid var(--linea)}
+.lote b{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--acento)}
+.lote span{font-size:10.5px;color:var(--texto);font-weight:650}
+.otros{font-size:10.5px;color:var(--suave);margin-top:5px;line-height:1.5;
+  padding-left:9px;border-left:2px solid var(--linea)}
+
 /* conteo del dia */
 .cnt{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
   border-radius:13px;padding:12px 13px;margin-bottom:8px}
@@ -251,7 +260,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.10";
+const VERSION = "v0.11";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -407,6 +416,15 @@ function pintarEstado(){
 }
 
 /* ---- vistas ---- */
+/* " · lote 2 de 3" cuando el mismo producto esta en varias filas.
+   Va en TODAS las pantallas, no solo en la de contar: en Buscar y en
+   Vender tambien salian dos filas iguales sin forma de distinguirlas. */
+function marcaLote(p){
+  const l = lotesDe(p);
+  if(l.length < 2) return "";
+  return ' · lote ' + (l.findIndex(x => x.id === p.id) + 1) + ' de ' + l.length;
+}
+
 function filaProd(p, extra){
   const d = diasPara(p.venc), f = franja(d);
   const div = document.createElement("div");
@@ -418,7 +436,7 @@ function filaProd(p, extra){
   div.innerHTML =
     '<div class="txt"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
       p.nom + '</b>' +
-    '<span>' + p.cat + ' · ' + textoStock(p) + ' · ' + plazo +
+    '<span>' + p.cat + ' · ' + textoStock(p) + ' · ' + plazo + marcaLote(p) +
       (p.aviso ? ' · ⚠ ' + p.aviso : '') + '</span></div>' +
     '<div class="der"><b>' + soles(valor(p)) + '</b><span>' +
       (extra || (fmtFecha(p.venc) || "—")) + '</span></div>';
@@ -871,6 +889,26 @@ function toca(p){
 
    En regimen normal todo cabe igual: A necesita ~13 conteos al dia,
    B ~2 y C ~1.3. Total ~17. Nadie se queda fuera; solo se ordena.   */
+/* ---- LOTES DEL MISMO PRODUCTO ---------------------------------------
+   El catalogo trae una fila por LOTE, no por producto: el mismo articulo
+   con dos vencimientos son dos filas con el mismo nombre e Ids que se
+   diferencian por un sufijo (-2, -3). En pantalla se veian identicas y el
+   lo dijo asi: "hay productos que tienen 2 fechas y la app no me dice por
+   cual lote me esta preguntando". Contaba a ciegas.
+
+   54 productos del catalogo tienen mas de un lote.                      */
+const nomClave = s => String(s || "").normalize("NFKD")
+  .replace(/[\u0300-\u036f]/g, "").toUpperCase()
+  .replace(/[^A-Z0-9]+/g, " ").trim();
+
+function lotesDe(p){
+  const k = nomClave(p.nom);
+  /* orden FEFO: primero el que vence antes, que es el que hay que sacar
+     primero del estante. Sin fecha va al final. */
+  return cat.filter(x => nomClave(x.nom) === k)
+            .sort((a,b) => (a.venc || "9999").localeCompare(b.venc || "9999"));
+}
+
 const RANGO = {A:0, B:1, C:2};
 function colaHoy(){
   const pend = cat.filter(toca);
@@ -883,7 +921,21 @@ function colaHoy(){
     if(da !== null && da !== db) return db - da;
     return valor(b) - valor(a);
   });
-  return pend.slice(0, META_DIARIA);
+  const elegidos = pend.slice(0, META_DIARIA);
+
+  /* Si un producto tiene varios lotes, se cuentan TODOS de una. Estan en
+     el mismo sitio del estante y ya tienes la caja en la mano; dejar el
+     segundo lote para dentro de un mes es garantizar que los numeros no
+     cuadren. Los lotes arrastrados no cuentan contra la meta del dia. */
+  const salida = [], vistos = new Set();
+  elegidos.forEach(p => {
+    lotesDe(p).forEach(h => {
+      if(vistos.has(h.id)) return;
+      vistos.add(h.id);
+      salida.push(h);
+    });
+  });
+  return salida;
 }
 
 function vistaContar(){
@@ -911,7 +963,13 @@ function vistaContar(){
     return mostrarDiferencias(v);
   }
 
+  const extra = cola.length - Math.min(META_DIARIA, cat.filter(toca).length);
   v.insertAdjacentHTML("beforeend", '<h2 class="sec">Cuenta estos ' + cola.length + '</h2>');
+  if(extra > 0)
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota" style="margin:0 0 10px"><b>' + extra + ' de estos son lotes ' +
+      'extra</b> del mismo producto. Están en el mismo sitio del estante: cuenta los dos ' +
+      'de una, y no cuentan contra la meta del día.</div>');
   cola.forEach(p => v.appendChild(filaConteo(p)));
   mostrarDiferencias(v);
 }
@@ -925,12 +983,29 @@ function filaConteo(p){
   const cuando = d === null ? "nunca contado" : "hace " + d + " días";
   const pideFecha = !p.venc;     /* el momento de anotarla es con la caja en la mano */
 
-  div.innerHTML =
+  /* De que lote estamos hablando. Sin esto, dos filas identicas. */
+  const lotes = lotesDe(p);
+  const cual  = lotes.findIndex(x => x.id === p.id) + 1;
+  const otros = lotes.filter(x => x.id !== p.id);
+  const cabLote = lotes.length > 1
+    ? '<div class="lote"><b>LOTE ' + cual + ' de ' + lotes.length + '</b>' +
+      (p.venc ? '<span>vence ' + fmtFecha(p.venc) + '</span>'
+              : '<span>sin fecha</span>') + '</div>'
+    : '';
+  const otrosTxt = otros.length
+    ? '<div class="otros">' + (otros.length === 1 ? "El otro lote" : "Los otros lotes") + ': ' +
+      otros.map(x => (x.venc ? "vence " + fmtFecha(x.venc) : "sin fecha") +
+                     " · " + (x.stock || 0) + " und").join(" — ") + '</div>'
+    : '';
+
+  div.innerHTML = cabLote +
     '<div class="cab"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
       p.nom + '</b>' +
     '<div class="esp">' + (p.visto ? "al " + fmtFecha(p.visto) : "sin contar") +
       '<br><b style="font-size:15px">' + (p.stock || 0) + '</b></div></div>' +
-    '<div class="sub">' + p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) + '</div>' +
+    '<div class="sub">' + p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) +
+      (p.venc && lotes.length === 1 ? ' · vence ' + fmtFecha(p.venc) : '') + '</div>' +
+    otrosTxt +
     (pideFecha ? '<div class="fecha"><small>⚠ Sin fecha de vencimiento — anótala del envase</small>' +
       '<input type="text" class="fv" inputmode="numeric" placeholder="dd/mm/aaaa" ' +
       'autocomplete="off"></div>' : '') +
@@ -1179,7 +1254,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.10 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.11 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
