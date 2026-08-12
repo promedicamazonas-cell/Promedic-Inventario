@@ -188,6 +188,11 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
 .lote span{font-size:10.5px;color:var(--texto);font-weight:650}
 .otros{font-size:10.5px;color:var(--suave);margin-top:5px;line-height:1.5;
   padding-left:9px;border-left:2px solid var(--linea)}
+.lote.igual{background:rgba(244,63,94,.12);border-color:var(--rojo)}
+.lote.igual b{color:var(--rojo)}
+.mismacaja{font-size:11px;line-height:1.5;color:var(--texto);background:rgba(244,63,94,.09);
+  border:1px solid var(--rojo);border-radius:9px;padding:8px 10px;margin:-4px -4px 8px}
+.mismacaja b{color:var(--rojo)}
 
 /* conteo del dia */
 .cnt{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
@@ -260,7 +265,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.13";
+const VERSION = "v0.14";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -477,7 +482,7 @@ function textoStock(p){
   if(d === 1) return s + " · contado ayer";
   return s + " · al " + fmtFecha(p.visto) + " (" + d + " d)";
 }
-const conStock = p => (p.stock || 0) > 0;
+const conStock = p => (p.stock || 0) > 0 && !p.fusion;
 
 function pintarEstado(){
   const e = $("#estado");
@@ -765,7 +770,7 @@ function vistaVender(){
   const pintar = () => {
     const q = norm(($("#qv").value || "").trim());
     const r = $("#resv"); r.innerHTML = "";
-    let l = cat.filter(p => p.abc === "A" && conStock(p));
+    let l = cat.filter(p => p.abc === "A" && conStock(p) && !p.fusion);
     if(q.length >= 2) l = l.filter(p => norm(p.nom).includes(q));
     /* Primero lo que ya vendiste alguna vez, lo mas reciente arriba; despues,
        por valor. Ordenar solo por valor sonaba bien pero no sirve en el
@@ -834,7 +839,7 @@ function vistaBuscar(){
         cat.length + ' productos en el catálogo.</div>';
       return;
     }
-    const l = cat.filter(p => norm(p.nom).includes(q)).slice(0, 60);
+    const l = cat.filter(p => !p.fusion && norm(p.nom).includes(q)).slice(0, 60);
     if(!l.length){ r.innerHTML = '<div class="vacio">Sin resultados para «' + $("#q").value + '».</div>'; return; }
     r.insertAdjacentHTML("beforeend", '<h2 class="sec">' + l.length + ' resultado(s)</h2>');
     l.forEach(p => {
@@ -943,6 +948,7 @@ function desdeConteo(p){
 }
 /* toca contarlo? nunca contado = si, siempre */
 function toca(p){
+  if(p.fusion) return false;          /* fila absorbida por otra: ya no existe */
   const d = desdeConteo(p);
   return d === null || d >= (CADA[p.abc] || 180);
 }
@@ -970,16 +976,52 @@ function toca(p){
    cual lote me esta preguntando". Contaba a ciegas.
 
    54 productos del catalogo tienen mas de un lote.                      */
+/* "X 7 OVULOS" y "X7 OVULOS" son el mismo producto. Sin separar la letra
+   del numero, CLINDESS aparecia dos veces y la app pedia contar la misma
+   caja dos veces sin avisar de nada. */
 const nomClave = s => String(s || "").normalize("NFKD")
   .replace(/[\u0300-\u036f]/g, "").toUpperCase()
-  .replace(/[^A-Z0-9]+/g, " ").trim();
+  .replace(/[^A-Z0-9]+/g, " ")
+  .replace(/([A-Z])(?=[0-9])/g, "$1 ")
+  .replace(/([0-9])(?=[A-Z])/g, "$1 ")
+  .replace(/\s+/g, " ").trim();
 
 function lotesDe(p){
   const k = nomClave(p.nom);
   /* orden FEFO: primero el que vence antes, que es el que hay que sacar
      primero del estante. Sin fecha va al final. */
-  return cat.filter(x => nomClave(x.nom) === k)
+  return cat.filter(x => nomClave(x.nom) === k && !x.fusion)
             .sort((a,b) => (a.venc || "9999").localeCompare(b.venc || "9999"));
+}
+
+/* Dos "lotes" con la MISMA fecha de vencimiento casi nunca son dos lotes:
+   es una fila duplicada. Y mientras esten separadas, la app le pide contar
+   dos veces la misma caja — que fue exactamente lo que le paso con
+   TRETOCHECK y con CLINDESS. */
+function gemelos(p){
+  if(!p.venc) return [];
+  return lotesDe(p).filter(x => x.id !== p.id && x.venc === p.venc);
+}
+
+/* Junta las filas en una sola. No borra: la absorbida queda en 0 y marcada,
+   para que el historial no se pierda y se pueda ver que paso. */
+function fusionar(p, otros){
+  const todos = [p].concat(otros);
+  /* sobrevive la que se conto mas recientemente; si ninguna, la de mas stock */
+  todos.sort((a,b) => (b.visto || "").localeCompare(a.visto || "") ||
+                      (b.stock || 0) - (a.stock || 0));
+  const q = todos[0];
+  const absorbidos = todos.slice(1);
+  q.stock = todos.reduce((s,x) => s + (x.stock || 0), 0);
+  absorbidos.forEach(x => {
+    x.fusion = q.id;
+    x.stock = 0;
+    x.aviso = ("fila juntada con " + q.id).slice(0, 80);
+  });
+  q.visto = hoyISO();
+  q.hist = (q.hist || []).concat([{f: hoyISO(), esp: q.stock, con: q.stock, fusion: true}]);
+  grabar(); pintarEstado();
+  return q;
 }
 
 const RANGO = {A:0, B:1, C:2};
@@ -1060,10 +1102,15 @@ function filaConteo(p){
   const lotes = lotesDe(p);
   const cual  = lotes.findIndex(x => x.id === p.id) + 1;
   const otros = lotes.filter(x => x.id !== p.id);
+  const gem = gemelos(p);
   const cabLote = lotes.length > 1
-    ? '<div class="lote"><b>LOTE ' + cual + ' de ' + lotes.length + '</b>' +
+    ? '<div class="lote' + (gem.length ? ' igual' : '') + '"><b>LOTE ' + cual + ' de ' +
+      lotes.length + '</b>' +
       (p.venc ? '<span>vence ' + fmtFecha(p.venc) + '</span>'
-              : '<span>sin fecha</span>') + '</div>'
+              : '<span>sin fecha</span>') + '</div>' +
+      (gem.length ? '<div class="mismacaja">⚠ <b>Los dos lotes vencen el mismo día.</b> ' +
+        'Casi seguro es una sola caja anotada dos veces — y así te toca contarla dos ' +
+        'veces. Si es la misma, júntalas.</div>' : '')
     : '';
   const otrosTxt = otros.length
     ? '<div class="otros">' + (otros.length === 1 ? "El otro lote" : "Los otros lotes") + ': ' +
@@ -1087,6 +1134,29 @@ function filaConteo(p){
       '<button class="sec ig">Igual</button>' +
       '<button class="gu">Guardar</button>' +
     '</div>';
+
+  if(gem.length){
+    const bx = document.createElement("div");
+    bx.className = "ret";
+    const bt = document.createElement("button");
+    const tot = [p].concat(gem).reduce((s,x) => s + (x.stock || 0), 0);
+    bt.textContent = "Es la misma caja · juntar en una sola";
+    bt.onclick = () => {
+      const todos = [p].concat(gem).slice()
+        .sort((a,b) => (b.visto || "").localeCompare(a.visto || "") ||
+                       (b.stock || 0) - (a.stock || 0));
+      const q = todos[0];
+      if(!confirm("Se van a juntar " + todos.length + " filas de:\n\n" + p.nom +
+                  "\n\nQueda UNA con " + tot + " unidades y costo S/ " +
+                  num(q.costo || 0) + ".\n\nLas otras quedan en 0 y marcadas, " +
+                  "no se borran.\n\n¿Seguro?"))
+        return;
+      fusionar(p, gem);
+      vistaContar();
+    };
+    bx.appendChild(bt);
+    div.appendChild(bx);
+  }
 
   const qty = div.querySelector(".qty");
   const fvi = div.querySelector(".fv");
@@ -1385,7 +1455,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.13 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.14 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
