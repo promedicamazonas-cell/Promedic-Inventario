@@ -186,6 +186,19 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
   background:var(--sup2);border:1px solid var(--linea)}
 .lote b{font-size:10px;font-weight:800;letter-spacing:.5px;color:var(--acento)}
 .lote span{font-size:10.5px;color:var(--texto);font-weight:650}
+.mk{color:var(--acento);font-weight:750;letter-spacing:.2px}
+.edit{margin-top:9px;padding:10px;border:1px dashed var(--linea);border-radius:11px;
+  background:var(--sup2)}
+.edit label{display:block;font-size:10.5px;color:var(--suave);margin:0 0 4px}
+.edit input{width:100%;padding:10px;border:1px solid var(--linea);border-radius:10px;
+  font-size:14px;font-family:inherit;background:var(--sup);color:var(--texto);margin-bottom:9px}
+.edit .fin{display:flex;gap:7px}
+.edit .fin button{flex:1;padding:10px;border:none;border-radius:10px;font-family:inherit;
+  font-size:12.5px;font-weight:750;cursor:pointer}
+.edit .fin .ok{background:var(--acento);color:#04121C}
+.edit .fin .no{background:var(--sup);color:var(--suave);border:1px solid var(--linea)}
+.lapiz{background:none;border:1px solid var(--linea);color:var(--suave);border-radius:9px;
+  padding:6px 10px;font-family:inherit;font-size:11px;cursor:pointer;margin-top:8px}
 .otros{font-size:10.5px;color:var(--suave);margin-top:5px;line-height:1.5;
   padding-left:9px;border-left:2px solid var(--linea)}
 .lote.igual{background:rgba(244,63,94,.12);border-color:var(--rojo)}
@@ -265,7 +278,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.14";
+const VERSION = "v0.15";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -391,11 +404,11 @@ function bajar(nombre, texto, tipo){
 
 function catalogoCSV(){
   const esc = t => '"' + String(t == null ? "" : t).replace(/"/g, '""') + '"';
-  const cab = ["Id","Producto","Categoria","Costo","Stock","Vencimiento","ABC","Aviso",
+  const cab = ["Id","Producto","Marca","Categoria","Costo","Stock","Vencimiento","ABC","Aviso",
                "Contado el","Conteos hechos","Ventas registradas"];
   const l = [cab.join(SEP)];
   cat.forEach(p => l.push([
-    esc(p.id), esc(p.nom), esc(p.cat), (p.costo || 0).toFixed(4), (p.stock || 0),
+    esc(p.id), esc(p.nom), esc(p.marca || ""), esc(p.cat), (p.costo || 0).toFixed(4), (p.stock || 0),
     p.venc || "", p.abc || "", esc(p.aviso || ""), p.visto || "",
     (p.hist || []).length,
     (p.ventas || []).reduce((s, v) => s + (v.q || 0), 0)
@@ -514,7 +527,8 @@ function filaProd(p, extra){
   div.innerHTML =
     '<div class="txt"><b><span class="pastilla abc' + p.abc + '">' + p.abc + '</span>' +
       p.nom + '</b>' +
-    '<span>' + p.cat + ' · ' + textoStock(p) + ' · ' + plazo + marcaLote(p) +
+    '<span>' + (p.marca ? '<b class="mk">' + p.marca + '</b> · ' : '') +
+      p.cat + ' · ' + textoStock(p) + ' · ' + plazo + marcaLote(p) +
       (p.aviso ? ' · ⚠ ' + p.aviso : '') + '</span></div>' +
     '<div class="der"><b>' + soles(valor(p)) + '</b><span>' +
       (extra || (fmtFecha(p.venc) || "—")) + '</span></div>';
@@ -851,6 +865,20 @@ function vistaBuscar(){
         c.style.margin = "-4px 0 8px";
         r.appendChild(c);
       }
+      /* Buscar es el sitio donde se llega a CUALQUIER producto, tenga o no
+         conteo pendiente. Por eso el lapiz tambien vive aqui. */
+      const lap = document.createElement("button");
+      lap.className = "lapiz";
+      lap.style.margin = "-2px 0 10px";
+      lap.textContent = p.marca ? "✎ Marca y vencimiento" : "✎ Falta la marca — ponerla";
+      lap.onclick = () => {
+        lap.style.display = "none";
+        const ed = editorDatos(p, hecho => { if(hecho) pintar();
+                                             else { ed.remove(); lap.style.display = ""; } });
+        ed.style.margin = "0 0 10px";
+        lap.after(ed);
+      };
+      r.appendChild(lap);
     });
   };
   $("#q").oninput = () => { $("#limpiaQ").style.display = $("#q").value ? "block" : "none"; pintar(); };
@@ -1089,6 +1117,69 @@ function vistaContar(){
   mostrarDiferencias(v);
 }
 
+/* ---- EDITAR MARCA Y VENCIMIENTO -------------------------------------
+   Se lo pidio asi: poner la marca cuando falta, y poder corregir la fecha
+   cuando esta mal. Las dos cosas se hacen en el mismo sitio y con la caja
+   en la mano, que es cuando se sabe la respuesta.
+
+   La fecha se puede CORREGIR, no solo rellenar. Hasta la v0.14 solo se
+   podia escribir si estaba vacia: una fecha mal cargada se quedaba mal
+   para siempre y arrastraba todas las alertas de vencimiento.
+
+   Cambiar una fecha que ya existia pide confirmacion. Rellenar una vacia
+   no: ahi no se pisa nada.                                              */
+const marcasUsadas = () => {
+  const m = {};
+  cat.forEach(p => { if(p.marca) m[p.marca] = 1; });
+  return Object.keys(m).sort();
+};
+
+function editorDatos(p, alGuardar){
+  const box = document.createElement("div");
+  box.className = "edit";
+  const lista = "mk" + Math.abs(String(p.id).split("").reduce((a,c) => a + c.charCodeAt(0), 0));
+  box.innerHTML =
+    '<label>Marca / laboratorio</label>' +
+    '<input type="text" class="mkin" list="' + lista + '" placeholder="ISDIN, La Roche-Posay, Genfar…" ' +
+      'autocomplete="off" value="' + (p.marca || "").replace(/"/g, "&quot;") + '">' +
+    '<datalist id="' + lista + '">' +
+      marcasUsadas().map(m => '<option value="' + m.replace(/"/g, "&quot;") + '">').join("") +
+    '</datalist>' +
+    '<label>Vence (dd/mm/aaaa)</label>' +
+    '<input type="text" class="vcin" inputmode="numeric" placeholder="dd/mm/aaaa" ' +
+      'autocomplete="off" value="' + (p.venc ? fmtFecha(p.venc) : "") + '">' +
+    '<div class="fin"><button class="no">Cancelar</button><button class="ok">Guardar</button></div>';
+  const mk = box.querySelector(".mkin"), vc = box.querySelector(".vcin");
+  mascaraFecha(vc);
+  box.querySelector(".no").onclick = () => { if(alGuardar) alGuardar(false); };
+  box.querySelector(".ok").onclick = () => {
+    const nuevaMarca = mk.value.trim();
+    const txt = vc.value.trim();
+    let venc = p.venc || "";
+    if(txt){
+      const iso = parseFecha(txt);
+      if(!iso) return alert("La fecha no es válida.\n\nEscríbela como dd/mm/aaaa, " +
+                            "por ejemplo 30/06/2028.");
+      if(p.venc && iso !== p.venc &&
+         !confirm("Vas a cambiar el vencimiento de:\n\n" + p.nom +
+                  "\n\nde " + fmtFecha(p.venc) + " a " + fmtFecha(iso) +
+                  "\n\nDe esta fecha dependen las alertas. ¿Seguro?"))
+        return;
+      venc = iso;
+    } else if(p.venc && !confirm("Vas a dejar sin fecha de vencimiento a:\n\n" + p.nom +
+                                 "\n\nLa app no podrá avisarte de él. ¿Seguro?")){
+      return;
+    } else {
+      venc = "";
+    }
+    p.marca = nuevaMarca;
+    p.venc = venc;
+    grabar(); pintarEstado();
+    if(alGuardar) alGuardar(true);
+  };
+  return box;
+}
+
 function filaConteo(p){
   const d = desdeConteo(p);
   const div = document.createElement("div");
@@ -1123,7 +1214,8 @@ function filaConteo(p){
       p.nom + '</b>' +
     '<div class="esp">' + (p.visto ? "al " + fmtFecha(p.visto) : "sin contar") +
       '<br><b style="font-size:15px">' + (p.stock || 0) + '</b></div></div>' +
-    '<div class="sub">' + p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) +
+    '<div class="sub">' + (p.marca ? '<b class="mk">' + p.marca + '</b> · ' : '') +
+      p.cat + ' · ' + cuando + ' · ' + soles(valor(p)) +
       (p.venc && lotes.length === 1 ? ' · vence ' + fmtFecha(p.venc) : '') + '</div>' +
     otrosTxt +
     (pideFecha ? '<div class="fecha"><small>⚠ Sin fecha de vencimiento — anótala del envase</small>' +
@@ -1156,6 +1248,23 @@ function filaConteo(p){
     };
     bx.appendChild(bt);
     div.appendChild(bx);
+  }
+
+  /* el lapiz solo aparece si la fila NO esta pidiendo ya la fecha: si falta,
+     el campo de arriba hace ese trabajo y dos campos de fecha confunden. */
+  if(!pideFecha){
+    const lap = document.createElement("button");
+    lap.className = "lapiz";
+    lap.textContent = p.marca ? "✎ Marca y vencimiento" : "✎ Falta la marca — ponerla";
+    lap.onclick = () => {
+      if(div.querySelector(".edit")) return;
+      lap.style.display = "none";
+      div.appendChild(editorDatos(p, hecho => {
+        if(hecho) vistaContar();
+        else { div.querySelector(".edit").remove(); lap.style.display = ""; }
+      }));
+    };
+    div.appendChild(lap);
   }
 
   const qty = div.querySelector(".qty");
@@ -1396,9 +1505,12 @@ function importar(txt){
       stock: parseFloat(r[ix("Stock")]) || 0,
       venc: (r[ix("Vencimiento")] || "").trim(),
       abc: (r[ix("ABC")] || "C").trim(),
-      aviso: ix("Aviso") >= 0 ? (r[ix("Aviso")] || "").trim() : ""
+      aviso: ix("Aviso") >= 0 ? (r[ix("Aviso")] || "").trim() : "",
+      marca: ix("Marca") >= 0 ? (r[ix("Marca")] || "").trim() : ""
     };
     if(v){
+      /* la marca que el escribio a mano no la pisa un archivo que venga vacio */
+      if(!p.marca && v.marca) p.marca = v.marca;
       if(v.visto){ p.visto = v.visto; conservados++; }
       if(v.hist)   p.hist   = v.hist;
       if(v.ventas) p.ventas = v.ventas;
@@ -1455,7 +1567,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.14 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.15 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
