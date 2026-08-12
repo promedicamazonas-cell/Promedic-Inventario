@@ -260,7 +260,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.12";
+const VERSION = "v0.13";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -363,6 +363,72 @@ function actaCSV(){
   bajas.filter(b => !b.deshecha).forEach(b => l.push([b.f, b.h, esc(b.nom), esc(b.id), esc(b.cat),
     b.motivo, b.q, (b.costo || 0).toFixed(4), (b.valor || 0).toFixed(2), b.venc || ""].join(SEP)));
   return l.join("\r\n");
+}
+
+/* ---- SALIDA DE DATOS ------------------------------------------------
+   Hasta la v0.12 la app era una calle de un solo sentido: se cargaba el
+   catalogo y nada podia salir. Sus 150 conteos y los 24 retiros vivian
+   solo en este telefono, sin forma de verlos desde la laptop ni de
+   recuperarlos si el telefono se pierde o se limpia el navegador.
+
+   Dos salidas, para dos cosas distintas:
+   - CSV del catalogo: para la laptop y para el Excel. Lleva el stock real
+     y la fecha de cada conteo, asi que al volver a entrar no se pisa nada.
+   - Copia de seguridad JSON: TODO, incluido el historial de conteos, las
+     ventas y las bajas. Es lo que se restaura si hay que empezar de cero.  */
+function bajar(nombre, texto, tipo){
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["\ufeff" + texto], {type: tipo}));
+  a.download = nombre;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+function catalogoCSV(){
+  const esc = t => '"' + String(t == null ? "" : t).replace(/"/g, '""') + '"';
+  const cab = ["Id","Producto","Categoria","Costo","Stock","Vencimiento","ABC","Aviso",
+               "Contado el","Conteos hechos","Ventas registradas"];
+  const l = [cab.join(SEP)];
+  cat.forEach(p => l.push([
+    esc(p.id), esc(p.nom), esc(p.cat), (p.costo || 0).toFixed(4), (p.stock || 0),
+    p.venc || "", p.abc || "", esc(p.aviso || ""), p.visto || "",
+    (p.hist || []).length,
+    (p.ventas || []).reduce((s, v) => s + (v.q || 0), 0)
+  ].join(SEP)));
+  return l.join("\r\n");
+}
+
+function bajarCatalogo(){
+  if(!cat.length) return alert("No hay catálogo cargado.");
+  bajar("INVENTARIO_CATALOGO_" + hoyISO() + ".csv", catalogoCSV(),
+        "text/csv;charset=utf-8");
+}
+
+function bajarRespaldo(){
+  if(!cat.length) return alert("No hay nada que respaldar.");
+  const d = {app:"PROMEDIC inventario", version:VERSION, fecha:hoyISO(),
+             catalogo:cat, bajas:bajas,
+             cargado:localStorage.getItem("promedic_inv_fecha") || ""};
+  bajar("respaldo_inventario_" + hoyISO() + ".json", JSON.stringify(d),
+        "application/json;charset=utf-8");
+}
+
+function restaurar(txt){
+  let d;
+  try { d = JSON.parse(txt.replace(/^\ufeff/, "")); }
+  catch(e){ return alert("Ese archivo no es una copia de seguridad válida."); }
+  if(!d || !Array.isArray(d.catalogo) || !d.catalogo.length)
+    return alert("Esa copia no trae catálogo.");
+  if(!confirm("Vas a reemplazar TODO lo que hay en este teléfono por la copia del " +
+              (d.fecha || "?") + ".\n\n" + d.catalogo.length + " productos. ¿Seguro?"))
+    return;
+  cat = d.catalogo;
+  bajas = Array.isArray(d.bajas) ? d.bajas : [];
+  grabar(); grabarBajas();
+  try { localStorage.setItem("promedic_inv_fecha", d.cargado || d.fecha || hoyISO()); } catch(e){}
+  pintarEstado();
+  alert("Restaurado: " + cat.length + " productos y " + bajas.length + " retiro(s).");
+  ir("resumen");
 }
 
 function bajarActa(){
@@ -1123,6 +1189,16 @@ function vistaDatos(){
     '<input type="file" id="arch" accept="*/*">' +
     '<div id="estadoCarga"></div>' +
     '<div id="info"></div>' +
+    '<h2 class="sec">Sacar los datos de este teléfono</h2>' +
+    '<div class="nota" style="margin-top:0">Lo que cuentas vive <b>solo en este teléfono</b>. ' +
+    'Descarga el catálogo para pasármelo, y haz una copia de seguridad de vez en cuando: ' +
+    'si pierdes el teléfono o limpias el navegador, sin copia no hay vuelta atrás.</div>' +
+    '<button class="btn sec" id="btnBajarCat">Descargar el catálogo (para la laptop)</button>' +
+    '<button class="btn sec" id="btnRespaldo">Copia de seguridad completa</button>' +
+    '<div class="nota">La <b>copia de seguridad</b> guarda además las fechas de cada conteo, ' +
+    'las ventas descontadas y los retiros. Es la que sirve para restaurar.</div>' +
+    '<input type="file" id="archResp" accept="*/*">' +
+    '<button class="btn sec" id="btnRestaurar">Restaurar desde una copia</button>' +
     '<h2 class="sec">Si el teléfono no te deja elegirlo</h2>' +
     '<div class="nota">Si al pulsar sale un menú con <b>Cámara</b> y <b>Grabadora</b>, ' +
     'desliza ese menú hacia los lados: suele haber un icono de <b>Archivos</b> o ' +
@@ -1156,6 +1232,16 @@ function vistaDatos(){
       try { importar(ev.target.result); }
       catch(err){ aviso("Error al procesar: " + err.message, true); }
     };
+    l.readAsText(f, "utf-8");
+  };
+  $("#btnBajarCat").onclick = bajarCatalogo;
+  $("#btnRespaldo").onclick  = bajarRespaldo;
+  $("#btnRestaurar").onclick = () => {
+    const f = $("#archResp").files[0];
+    if(!f) return alert("Primero elige el archivo de copia (termina en .json).");
+    const l = new FileReader();
+    l.onerror = () => alert("El teléfono no pudo leer ese archivo.");
+    l.onload = ev => restaurar(ev.target.result);
     l.readAsText(f, "utf-8");
   };
   $("#btnClave").onclick = async () => {
@@ -1215,18 +1301,46 @@ function importar(txt){
   const falta = need.filter(n => ix(n) < 0);
   if(falta.length) return alert("Al archivo le faltan columnas: " + falta.join(", ") + "\n\nCabecera encontrada:\n" + cab.join(" | "));
 
+  /* Lo YA CONTADO no se pierde al recargar el catalogo.
+     Antes, importar reemplazaba el catalogo entero y se llevaba por delante
+     la fecha de cada conteo, el historial y las ventas. El conto 150
+     productos en dos dias: cargar un CSV le habria borrado ese trabajo y la
+     cola habria vuelto a cero, sin avisar. Ahora se conserva por Id.
+
+     El STOCK del archivo si manda: es lo que el archivo trae. Pero si el
+     archivo es mas viejo que el ultimo conteo, gana el conteo — la
+     mercaderia contada con la mano es mas fiable que un CSV de la semana
+     pasada. */
+  const antes = {};
+  cat.forEach(p => { antes[p.id] = p; });
   const nuevo = [];
+  let conservados = 0, stockDefendido = 0;
   for(let i = 1; i < filas.length; i++){
     const r = filas[i];
     if(!r[ix("Producto")]) continue;
-    nuevo.push({
-      id: r[ix("Id")], nom: r[ix("Producto")], cat: r[ix("Categoria")],
+    const id = r[ix("Id")];
+    const v = antes[id];
+    const p = {
+      id: id, nom: r[ix("Producto")], cat: r[ix("Categoria")],
       costo: parseFloat(r[ix("Costo")]) || 0,
       stock: parseFloat(r[ix("Stock")]) || 0,
       venc: (r[ix("Vencimiento")] || "").trim(),
       abc: (r[ix("ABC")] || "C").trim(),
       aviso: ix("Aviso") >= 0 ? (r[ix("Aviso")] || "").trim() : ""
-    });
+    };
+    if(v){
+      if(v.visto){ p.visto = v.visto; conservados++; }
+      if(v.hist)   p.hist   = v.hist;
+      if(v.ventas) p.ventas = v.ventas;
+      /* el archivo trae una fecha de corte? si no, el conteo manda */
+      const corte = (ix("Contado el") >= 0 ? (r[ix("Contado el")] || "").trim() : "");
+      if(corte) p.visto = corte;
+      else if(v.visto && v.visto >= (localStorage.getItem("promedic_inv_fecha") || "0000")){
+        p.stock = v.stock; stockDefendido++;
+      }
+      if(ix("Contado el") >= 0 && corte) p.stock = parseFloat(r[ix("Stock")]) || 0;
+    }
+    nuevo.push(p);
   }
   if(!nuevo.length) return alert("No encontré productos en el archivo.");
   cat = nuevo;
@@ -1242,6 +1356,10 @@ function importar(txt){
   try { localStorage.setItem("promedic_inv_fecha", new Date().toISOString().slice(0,10)); } catch(e){}
   pintarEstado();
   alert("Catálogo cargado: " + cat.length + " productos." +
+        (conservados ? "\n\nSe conservó la fecha de conteo de " + conservados +
+         " producto(s): recargar el catálogo NO borra lo que ya contaste." : "") +
+        (stockDefendido ? "\n" + stockDefendido + " producto(s) mantuvieron el stock de tu " +
+         "conteo, más reciente que el del archivo." : "") +
         (revividos ? "\n\n" + revividos + " producto(s) que ya habías retirado se " +
          "volvieron a poner en 0: el archivo traía el stock de antes del retiro." : ""));
   ir("resumen");
@@ -1267,7 +1385,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.12 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.13 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
