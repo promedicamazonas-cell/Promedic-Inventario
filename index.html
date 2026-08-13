@@ -284,7 +284,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.17";
+const VERSION = "v0.18";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -408,6 +408,95 @@ function bajar(nombre, texto, tipo){
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
+/* ---- COMPARTIR (v0.18) ----------------------------------------------
+   Descargar deja el archivo en Descargas y hay que ir a buscarlo. Con el
+   menu del telefono el archivo sale directo a WhatsApp, sin explorador.
+
+   Cuatro cosas que no son obvias y que ya costaron leerlas dos veces:
+
+   1. navigator.share solo existe en HTTPS. En la URL de Vercel si; si el
+      abre el index.html desde el propio telefono con file://, no. Por eso
+      SIEMPRE hay un plan B que descarga: nunca se queda sin salida.
+
+   2. Hay que llamarlo dentro del toque del usuario y sin esperar nada
+      antes. Un solo await previo gasta el permiso del toque y el menu ya
+      no abre (NotAllowedError). Por eso los archivos se arman en memoria,
+      que es instantaneo, y share() se llama de una.
+
+   3. canShare({files}) hay que preguntarlo aparte: hay navegadores que
+      comparten texto pero no archivos, y otros que aceptan uno y no dos.
+
+   4. Si cierra el menu sin elegir, share() lanza AbortError. Eso NO es un
+      error: cambio de opinion. No se le avisa nada ni se le descarga el
+      archivo a la fuerza, que seria hacer justo lo que no pidio.        */
+function archivoDe(nombre, texto, tipo){
+  /* Mismo BOM que la descarga. Sin el, su Excel abre el CSV con las
+     tildes rotas. La copia JSON tambien lo lleva, y restaurar() y el
+     lector de la laptop ya lo saben quitar. */
+  return new File(["\ufeff" + texto], nombre, {type: tipo});
+}
+
+function seComparte(archivos){
+  try { return !!(navigator.share && navigator.canShare &&
+                  navigator.canShare({files: archivos})); }
+  catch(e){ return false; }   // canShare tira en algunos navegadores viejos
+}
+
+function compartir(archivos, planB){
+  if(!seComparte(archivos)){ planB(); return false; }
+  navigator.share({files: archivos}).catch(err => {
+    if(err && err.name === "AbortError") return;   // cerro el menu, y ya
+    planB();
+  });
+  return true;
+}
+
+function respaldoJSON(){
+  return JSON.stringify({app:"PROMEDIC inventario", version:VERSION, fecha:hoyISO(),
+                         catalogo:cat, bajas:bajas,
+                         cargado:localStorage.getItem("promedic_inv_fecha") || ""});
+}
+
+/* Los DOS archivos de una sola vez, porque los dos hacen falta y mandar
+   uno solo es el error facil: el catalogo lleva el stock, pero el
+   historial de conteos, las ventas descontadas y los retiros viven en la
+   copia. Con el catalogo solo, la mitad del trabajo del dia no viaja. */
+function compartirTodo(){
+  if(!cat.length) return alert("No hay catálogo cargado.");
+  const f = hoyISO();
+  const csv  = archivoDe("INVENTARIO_CATALOGO_" + f + ".csv", catalogoCSV(), "text/csv");
+  const json = archivoDe("respaldo_inventario_" + f + ".json", respaldoJSON(), "application/json");
+  const ambos = () => { bajarCatalogo(); bajarRespaldo(); };
+
+  if(seComparte([csv, json])){
+    compartir([csv, json], ambos);
+    return notaComp("Se abrió el menú del teléfono con los <b>dos</b> archivos.");
+  }
+  if(seComparte([csv])){
+    compartir([csv], bajarCatalogo);
+    return notaComp("Este teléfono solo deja mandar <b>un</b> archivo por vez. " +
+      "Va el catálogo. La copia de seguridad mándala aparte con el botón de abajo.", true);
+  }
+  ambos();
+  notaComp("Este navegador no tiene menú de compartir. Los dos archivos quedaron " +
+           "en <b>Descargas</b>. Si estás en la dirección de internet y aun así sale " +
+           "esto, avísame.", true);
+}
+
+function compartirRespaldo(){
+  if(!cat.length) return alert("No hay nada que respaldar.");
+  const j = archivoDe("respaldo_inventario_" + hoyISO() + ".json", respaldoJSON(),
+                      "application/json");
+  if(!compartir([j], bajarRespaldo))
+    notaComp("Sin menú de compartir: la copia quedó en <b>Descargas</b>.", true);
+}
+
+function notaComp(t, ojo){
+  const c = document.getElementById("estadoComp");
+  if(c) c.innerHTML = '<div class="nota" style="border-color:' +
+    (ojo ? "var(--ambar, var(--linea))" : "var(--acento)") + '">' + t + '</div>';
+}
+
 function catalogoCSV(){
   const esc = t => '"' + String(t == null ? "" : t).replace(/"/g, '""') + '"';
   const cab = ["Id","Producto","Marca","Presentacion","Categoria","Costo","Stock","Vencimiento",
@@ -431,10 +520,11 @@ function bajarCatalogo(){
 
 function bajarRespaldo(){
   if(!cat.length) return alert("No hay nada que respaldar.");
-  const d = {app:"PROMEDIC inventario", version:VERSION, fecha:hoyISO(),
-             catalogo:cat, bajas:bajas,
-             cargado:localStorage.getItem("promedic_inv_fecha") || ""};
-  bajar("respaldo_inventario_" + hoyISO() + ".json", JSON.stringify(d),
+  /* La copia se arma en respaldoJSON() y NO se duplica aqui: si el dia de
+     manana se agrega un campo, tiene que salir igual por descarga y por
+     compartir. Dos copias del mismo armado es como se llega a que un
+     boton mande algo distinto del otro. */
+  bajar("respaldo_inventario_" + hoyISO() + ".json", respaldoJSON(),
         "application/json;charset=utf-8");
 }
 
@@ -454,6 +544,13 @@ function restaurar(txt){
   pintarEstado();
   alert("Restaurado: " + cat.length + " productos y " + bajas.length + " retiro(s).");
   ir("resumen");
+}
+
+function compartirActa(){
+  const vivas = bajas.filter(b => !b.deshecha);
+  if(!vivas.length) return alert("Todavía no has retirado nada.");
+  compartir([archivoDe("acta_retiro_" + hoyISO() + ".csv", actaCSV(), "text/csv")],
+            bajarActa);
 }
 
 function bajarActa(){
@@ -672,6 +769,11 @@ function vistaVencer(){
       div.appendChild(box);
       v.appendChild(div);
     });
+    const bc = document.createElement("button");
+    bc.className = "btn"; bc.id = "btnCompActa";
+    bc.textContent = "Compartir el acta de retiro";
+    bc.onclick = compartirActa;
+    v.appendChild(bc);
     const btn = document.createElement("button");
     btn.className = "btn sec";
     btn.textContent = "Descargar el acta de retiro (CSV)";
@@ -1446,7 +1548,7 @@ function vistaDatos(){
     '<div id="estadoClave"></div>' +
     '<h2 class="sec">Cargar o actualizar el catálogo</h2>' +
     '<div class="nota" style="margin-top:0"><b>Versión instalada: ' + VERSION + '</b><br>' +
-    'Si esto no dice v0.7 o más, el teléfono usa una copia vieja: recarga la ' +
+    'Si esto no dice v0.18, el teléfono usa una copia vieja: recarga la ' +
     'página, o quítala de la pantalla de inicio y vuelve a añadirla.</div>' +
     '<div class="nota">Elige el archivo <b>INVENTARIO_CATALOGO.csv</b> que está en tu carpeta ' +
     '<b>app-registro</b>. Se guarda en este teléfono y funciona sin internet.<br><br>' +
@@ -1457,12 +1559,17 @@ function vistaDatos(){
     '<div id="info"></div>' +
     '<h2 class="sec">Sacar los datos de este teléfono</h2>' +
     '<div class="nota" style="margin-top:0">Lo que cuentas vive <b>solo en este teléfono</b>. ' +
-    'Descarga el catálogo para pasármelo, y haz una copia de seguridad de vez en cuando: ' +
-    'si pierdes el teléfono o limpias el navegador, sin copia no hay vuelta atrás.</div>' +
-    '<button class="btn sec" id="btnBajarCat">Descargar el catálogo (para la laptop)</button>' +
-    '<button class="btn sec" id="btnRespaldo">Copia de seguridad completa</button>' +
-    '<div class="nota">La <b>copia de seguridad</b> guarda además las fechas de cada conteo, ' +
-    'las ventas descontadas y los retiros. Es la que sirve para restaurar.</div>' +
+    'Mándamelo cuando termines de contar: es lo que me deja actualizar el Excel, y es tu ' +
+    'única copia si el teléfono se pierde o se limpia el navegador.</div>' +
+    '<button class="btn" id="btnCompartir">Compartir · mandar los dos archivos</button>' +
+    '<div id="estadoComp"></div>' +
+    '<div class="nota">Abre el menú del teléfono y lo mandas por WhatsApp, correo o donde ' +
+    'quieras, <b>sin buscarlo en Descargas</b>. Van los <b>dos</b>: el catálogo (el que ' +
+    'entra al Excel) y la copia de seguridad, que además guarda las fechas de cada conteo, ' +
+    'las ventas descontadas y los retiros.</div>' +
+    '<button class="btn sec" id="btnCompResp">Compartir solo la copia de seguridad</button>' +
+    '<button class="btn sec" id="btnBajarCat">Descargar el catálogo (a Descargas)</button>' +
+    '<button class="btn sec" id="btnRespaldo">Descargar la copia (a Descargas)</button>' +
     '<input type="file" id="archResp" accept="*/*">' +
     '<button class="btn sec" id="btnRestaurar">Restaurar desde una copia</button>' +
     '<h2 class="sec">Si el teléfono no te deja elegirlo</h2>' +
@@ -1500,7 +1607,9 @@ function vistaDatos(){
     };
     l.readAsText(f, "utf-8");
   };
-  $("#btnBajarCat").onclick = bajarCatalogo;
+  $("#btnCompartir").onclick = compartirTodo;
+  $("#btnCompResp").onclick  = compartirRespaldo;
+  $("#btnBajarCat").onclick  = bajarCatalogo;
   $("#btnRespaldo").onclick  = bajarRespaldo;
   $("#btnRestaurar").onclick = () => {
     const f = $("#archResp").files[0];
@@ -1659,7 +1768,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.17 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.18 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
