@@ -278,7 +278,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.15";
+const VERSION = "v0.16";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -404,12 +404,12 @@ function bajar(nombre, texto, tipo){
 
 function catalogoCSV(){
   const esc = t => '"' + String(t == null ? "" : t).replace(/"/g, '""') + '"';
-  const cab = ["Id","Producto","Marca","Categoria","Costo","Stock","Vencimiento","ABC","Aviso",
+  const cab = ["Id","Producto","Marca","Categoria","Costo","Stock","Vencimiento","Lote","ABC","Aviso",
                "Contado el","Conteos hechos","Ventas registradas"];
   const l = [cab.join(SEP)];
   cat.forEach(p => l.push([
     esc(p.id), esc(p.nom), esc(p.marca || ""), esc(p.cat), (p.costo || 0).toFixed(4), (p.stock || 0),
-    p.venc || "", p.abc || "", esc(p.aviso || ""), p.visto || "",
+    p.venc || "", esc(p.lote || ""), p.abc || "", esc(p.aviso || ""), p.visto || "",
     (p.hist || []).length,
     (p.ventas || []).reduce((s, v) => s + (v.q || 0), 0)
   ].join(SEP)));
@@ -865,6 +865,25 @@ function vistaBuscar(){
         c.style.margin = "-4px 0 8px";
         r.appendChild(c);
       }
+      /* Al juntar dos filas, la que sobrevive queda contada hoy y sale de la
+         cola: el boton de deshacer NO se puede quedar solo en Contar, porque
+         ahi ya no aparece. Buscar es el unico sitio que llega a cualquier
+         producto, tenga o no conteo pendiente. */
+      if(p.desunir){
+        const bx = document.createElement("div");
+        bx.className = "ret"; bx.style.margin = "-2px 0 8px";
+        const bd = document.createElement("button");
+        bd.className = "des";
+        bd.textContent = "Deshacer la unión · separar otra vez";
+        bd.onclick = () => {
+          if(!confirm("Vas a separar otra vez las filas de:\n\n" + p.nom +
+                      "\n\nCada una vuelve al stock que tenía. ¿Seguro?")) return;
+          desunir(p); pintar();
+        };
+        bx.appendChild(bd);
+        r.appendChild(bx);
+      }
+
       /* Buscar es el sitio donde se llega a CUALQUIER producto, tenga o no
          conteo pendiente. Por eso el lapiz tambien vive aqui. */
       const lap = document.createElement("button");
@@ -1022,13 +1041,25 @@ function lotesDe(p){
             .sort((a,b) => (a.venc || "9999").localeCompare(b.venc || "9999"));
 }
 
-/* Dos "lotes" con la MISMA fecha de vencimiento casi nunca son dos lotes:
-   es una fila duplicada. Y mientras esten separadas, la app le pide contar
-   dos veces la misma caja — que fue exactamente lo que le paso con
-   TRETOCHECK y con CLINDESS. */
+/* Dos filas del mismo producto con la misma fecha PUEDEN ser una fila
+   duplicada... o dos lotes de verdad.
+
+   Ojo con esto, que no es un detalle: las fechas del catalogo son de
+   MES Y ANIO (el dia siempre es 01). Dos lotes distintos comprados en
+   momentos distintos comparten mes de vencimiento sin ningun problema.
+   Asi que la fecha igual es una SOSPECHA, no una prueba.
+
+   Lo unico que lo decide es el NUMERO DE LOTE del envase. Por eso:
+   si las dos filas tienen lote escrito y son distintos, son dos lotes
+   de verdad y la app se calla. */
 function gemelos(p){
   if(!p.venc) return [];
-  return lotesDe(p).filter(x => x.id !== p.id && x.venc === p.venc);
+  return lotesDe(p).filter(x => {
+    if(x.id === p.id || x.venc !== p.venc) return false;
+    if(p.lote && x.lote && p.lote.trim().toUpperCase() !== x.lote.trim().toUpperCase())
+      return false;                       /* lotes distintos: no son la misma caja */
+    return true;
+  });
 }
 
 /* Junta las filas en una sola. No borra: la absorbida queda en 0 y marcada,
@@ -1040,6 +1071,12 @@ function fusionar(p, otros){
                       (b.stock || 0) - (a.stock || 0));
   const q = todos[0];
   const absorbidos = todos.slice(1);
+  /* Todo lo necesario para volver atras. La app SUGIERE que son la misma
+     caja, y una sugerencia que no se puede deshacer no es una sugerencia:
+     es una decision tomada por el. */
+  q.desunir = {mio: q.stock || 0, visto: q.visto || "",
+               otros: absorbidos.map(x => ({id: x.id, stock: x.stock || 0,
+                                            aviso: x.aviso || ""}))};
   q.stock = todos.reduce((s,x) => s + (x.stock || 0), 0);
   absorbidos.forEach(x => {
     x.fusion = q.id;
@@ -1050,6 +1087,21 @@ function fusionar(p, otros){
   q.hist = (q.hist || []).concat([{f: hoyISO(), esp: q.stock, con: q.stock, fusion: true}]);
   grabar(); pintarEstado();
   return q;
+}
+
+function desunir(q){
+  const d = q.desunir;
+  if(!d) return;
+  (d.otros || []).forEach(o => {
+    const x = cat.find(y => y.id === o.id);
+    if(!x) return;
+    x.stock = o.stock; x.aviso = o.aviso; delete x.fusion;
+  });
+  q.stock = d.mio;
+  q.visto = d.visto;
+  if(q.hist && q.hist.length && q.hist[q.hist.length - 1].fusion) q.hist.pop();
+  delete q.desunir;
+  grabar(); pintarEstado();
 }
 
 const RANGO = {A:0, B:1, C:2};
@@ -1148,6 +1200,10 @@ function editorDatos(p, alGuardar){
     '<label>Vence (dd/mm/aaaa)</label>' +
     '<input type="text" class="vcin" inputmode="numeric" placeholder="dd/mm/aaaa" ' +
       'autocomplete="off" value="' + (p.venc ? fmtFecha(p.venc) : "") + '">' +
+    '<label>N° de lote del envase</label>' +
+    '<input type="text" class="ltin" placeholder="el que dice la caja" ' +
+      'autocomplete="off" autocapitalize="characters" value="' +
+      (p.lote || "").replace(/"/g, "&quot;") + '">' +
     '<div class="fin"><button class="no">Cancelar</button><button class="ok">Guardar</button></div>';
   const mk = box.querySelector(".mkin"), vc = box.querySelector(".vcin");
   mascaraFecha(vc);
@@ -1174,6 +1230,7 @@ function editorDatos(p, alGuardar){
     }
     p.marca = nuevaMarca;
     p.venc = venc;
+    p.lote = box.querySelector(".ltin").value.trim();
     grabar(); pintarEstado();
     if(alGuardar) alGuardar(true);
   };
@@ -1194,18 +1251,21 @@ function filaConteo(p){
   const cual  = lotes.findIndex(x => x.id === p.id) + 1;
   const otros = lotes.filter(x => x.id !== p.id);
   const gem = gemelos(p);
+  const loteTxt = p.lote ? ' · lote ' + p.lote : '';
   const cabLote = lotes.length > 1
     ? '<div class="lote' + (gem.length ? ' igual' : '') + '"><b>LOTE ' + cual + ' de ' +
       lotes.length + '</b>' +
-      (p.venc ? '<span>vence ' + fmtFecha(p.venc) + '</span>'
-              : '<span>sin fecha</span>') + '</div>' +
-      (gem.length ? '<div class="mismacaja">⚠ <b>Los dos lotes vencen el mismo día.</b> ' +
-        'Casi seguro es una sola caja anotada dos veces — y así te toca contarla dos ' +
-        'veces. Si es la misma, júntalas.</div>' : '')
+      (p.venc ? '<span>vence ' + fmtFecha(p.venc) + loteTxt + '</span>'
+              : '<span>sin fecha' + loteTxt + '</span>') + '</div>' +
+      (gem.length ? '<div class="mismacaja">⚠ <b>Los dos vencen el mismo mes.</b> ' +
+        'Puede ser una fila duplicada… o dos lotes de verdad. <b>Mira el número de lote ' +
+        'del envase:</b> si es el mismo, júntalas; si son distintos, anótalos con el ✎ y ' +
+        'no vuelvo a preguntarte.</div>' : '')
     : '';
   const otrosTxt = otros.length
     ? '<div class="otros">' + (otros.length === 1 ? "El otro lote" : "Los otros lotes") + ': ' +
       otros.map(x => (x.venc ? "vence " + fmtFecha(x.venc) : "sin fecha") +
+                     (x.lote ? " · lote " + x.lote : "") +
                      " · " + (x.stock || 0) + " und").join(" — ") + '</div>'
     : '';
 
@@ -1252,6 +1312,22 @@ function filaConteo(p){
 
   /* el lapiz solo aparece si la fila NO esta pidiendo ya la fecha: si falta,
      el campo de arriba hace ese trabajo y dos campos de fecha confunden. */
+  if(p.desunir){
+    const bx = document.createElement("div");
+    bx.className = "ret";
+    const bt = document.createElement("button");
+    bt.className = "des";
+    bt.textContent = "Deshacer la unión · separar otra vez";
+    bt.onclick = () => {
+      if(!confirm("Vas a separar otra vez las filas de:\n\n" + p.nom +
+                  "\n\nCada una vuelve al stock que tenía. ¿Seguro?")) return;
+      desunir(p);
+      vistaContar();
+    };
+    bx.appendChild(bt);
+    div.appendChild(bx);
+  }
+
   if(!pideFecha){
     const lap = document.createElement("button");
     lap.className = "lapiz";
@@ -1506,11 +1582,13 @@ function importar(txt){
       venc: (r[ix("Vencimiento")] || "").trim(),
       abc: (r[ix("ABC")] || "C").trim(),
       aviso: ix("Aviso") >= 0 ? (r[ix("Aviso")] || "").trim() : "",
-      marca: ix("Marca") >= 0 ? (r[ix("Marca")] || "").trim() : ""
+      marca: ix("Marca") >= 0 ? (r[ix("Marca")] || "").trim() : "",
+      lote: ix("Lote") >= 0 ? (r[ix("Lote")] || "").trim() : ""
     };
     if(v){
       /* la marca que el escribio a mano no la pisa un archivo que venga vacio */
       if(!p.marca && v.marca) p.marca = v.marca;
+      if(!p.lote && v.lote) p.lote = v.lote;
       if(v.visto){ p.visto = v.visto; conservados++; }
       if(v.hist)   p.hist   = v.hist;
       if(v.ventas) p.ventas = v.ventas;
@@ -1567,7 +1645,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.15 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.16 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
