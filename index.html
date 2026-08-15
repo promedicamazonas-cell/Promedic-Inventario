@@ -150,6 +150,8 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
 .busca button:active{background:var(--linea)}
 
 /* venta rapida: SOLO clase A */
+.vr.cta button{background:var(--acento);color:#04121A}
+.corr{font-size:11px;color:var(--suave);padding:0 12px 8px}
 .vr{display:flex;gap:7px;margin-top:9px;align-items:center}
 .vr input{flex:1 1 auto;min-width:0;padding:9px 6px;text-align:center;font-size:15px;
   font-weight:700;border:1px solid var(--linea);border-radius:10px;background:var(--sup2);
@@ -284,7 +286,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.19";
+const VERSION = "v0.20";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -968,6 +970,13 @@ function vistaBuscar(){
     l.forEach(p => {
       const fila = filaProd(p);
       r.appendChild(fila);
+      /* Contar o corregir, para CUALQUIER clase: el error de conteo no
+         distingue de clases, y Buscar es el unico sitio que llega a un
+         producto que ya salio de la cola. Va antes que la venta porque
+         corregir un conteo recien hecho es lo urgente. */
+      const cc = controlConteo(p, () => pintar());
+      cc.style.margin = "-4px 0 8px";
+      r.appendChild(cc);
       /* solo clase A: es donde una venta suelta cambia el numero de verdad */
       if(p.abc === "A"){
         const c = controlVenta(p, () => pintar());
@@ -1496,6 +1505,67 @@ function registrarConteo(p, contado, fechaVenc){
   pintarEstado();
 }
 
+/* ---- CORREGIR UN CONTEO (v0.20) --------------------------------------
+   Conto un producto, guardo, y despues encontro mas unidades. Hasta la
+   v0.19 no habia vuelta atras: el producto salia de la cola y no volvia
+   hasta que le tocara por su clase — 30 dias en la A.
+
+   La distincion que hace este codigo, y que importa mas de lo que parece:
+
+   - Si el conteo es de HOY, esto es una CORRECCION, no un conteo nuevo.
+     Se reescribe la ultima linea del historial y **se respeta su `esp`**,
+     que es lo que decia el sistema ANTES de contar. Si se guardara como
+     un segundo conteo, la diferencia contra el primero entraria como si
+     fuera merma del dia, y la merma es justo el numero que estamos
+     esperando: ensuciarlo con una correccion de dedo seria peor que no
+     tenerlo.
+   - Si el ultimo conteo es de otro dia, entonces si es un conteo nuevo y
+     va por el camino normal.
+
+   Queda `corr` en la linea del historial: cuantas veces se corrigio. No
+   se borra nada — el historial es la memoria del inventario.            */
+function corregirConteo(p, contado){
+  const u = (p.hist || []).length ? p.hist[p.hist.length - 1] : null;
+  if(u && u.f === hoyISO()){
+    u.con = contado;
+    u.corr = (u.corr || 0) + 1;
+    p.stock = contado;
+    p.visto = hoyISO();
+    grabar(); pintarEstado();
+    return "corregido";
+  }
+  registrarConteo(p, contado);
+  return "contado";
+}
+
+/* La caja de contar/corregir. Vive en Buscar —el unico sitio que llega a
+   CUALQUIER producto, tenga o no conteo pendiente— y debajo de cada
+   producto de "Contados hoy", que es donde el mira justo despues de
+   guardar y donde se da cuenta del error.                               */
+function controlConteo(p, alHacer){
+  const hoy = p.visto === hoyISO();
+  const box = document.createElement("div");
+  box.className = "vr cta";
+  box.innerHTML = '<input type="number" inputmode="numeric" min="0" ' +
+    'placeholder="' + (hoy ? "contaste " + (p.stock || 0) + " — ¿cuántos hay?"
+                           : "¿cuántos hay?") + '">' +
+    '<button class="ok">' + (hoy ? "Corregir" : "Contar") + '</button>';
+  const inp = box.querySelector("input");
+  box.querySelector(".ok").onclick = () => {
+    const c = parseFloat(inp.value);
+    if(isNaN(c) || c < 0) return alert("Escribe cuántas unidades hay.");
+    /* Confirmar SOLO al corregir: contar por primera vez no necesita
+       friccion, pero pisar un conteo del dia si — y el aviso dice las dos
+       cifras para que vea lo que esta cambiando. */
+    if(hoy && !confirm("Hoy contaste " + (p.stock || 0) + " de:\n\n" + p.nom +
+                       "\n\nVas a dejarlo en " + c + ". ¿Seguro?")) return;
+    const r = corregirConteo(p, c);
+    if(alHacer) alHacer(r);
+  };
+  inp.onkeydown = e => { if(e.key === "Enter") box.querySelector(".ok").click(); };
+  return box;
+}
+
 /* Lo contado hoy, con su diferencia en unidades y en soles. */
 function mostrarDiferencias(v){
   const hechos = cat.filter(p => p.visto === hoyISO() && p.hist && p.hist.length);
@@ -1514,8 +1584,15 @@ function mostrarDiferencias(v){
         ' · contado ' + u.con + '</span></div>' +
       '<div class="der"><b class="dif ' + (d > 0 ? "mas" : d < 0 ? "menos" : "") + '">' +
         (d === 0 ? "exacto" : (d > 0 ? "+" : "") + d) + '</b>' +
-        '<span>' + (d === 0 ? "" : soles(Math.abs(d * (p.costo || 0)))) + '</span></div>';
+        '<span>' + (d === 0 ? "" : soles(Math.abs(d * (p.costo || 0)))) + '</span></div>' +
+      (u.corr ? '<div class="corr">corregido ' + u.corr + (u.corr > 1 ? " veces" : " vez") +
+                '</div>' : '');
     v.appendChild(div);
+    /* El error se ve aqui, mirando la lista de lo contado: que se pueda
+       arreglar aqui mismo y no haya que ir a buscarlo. */
+    const cc = controlConteo(p, () => vistaContar());
+    cc.style.margin = "-4px 0 10px";
+    v.appendChild(cc);
   });
   if(dif !== 0){
     v.insertAdjacentHTML("beforeend",
@@ -1768,7 +1845,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.19 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.20 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
