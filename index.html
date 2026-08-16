@@ -152,6 +152,9 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
 /* venta rapida: SOLO clase A */
 .vr.cta button{background:var(--acento);color:#04121A}
 .corr{font-size:11px;color:var(--suave);padding:0 12px 8px}
+.juntada{background:var(--sup);border:1px dashed var(--linea);border-radius:12px;
+  padding:10px 12px;margin:-4px 0 8px;font-size:12.5px;color:var(--suave);line-height:1.45}
+.juntada b{color:var(--texto)}
 .vr{display:flex;gap:7px;margin-top:9px;align-items:center}
 .vr input{flex:1 1 auto;min-width:0;padding:9px 6px;text-align:center;font-size:15px;
   font-weight:700;border:1px solid var(--linea);border-radius:10px;background:var(--sup2);
@@ -286,7 +289,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.20";
+const VERSION = "v0.21";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -964,12 +967,44 @@ function vistaBuscar(){
         cat.length + ' productos en el catálogo.</div>';
       return;
     }
-    const l = cat.filter(p => !p.fusion && norm(p.nom).includes(q)).slice(0, 60);
+    /* v0.21: las filas juntadas TAMBIEN salen. Antes se filtraban con
+       !p.fusion y el resultado era que una fila absorbida parecia borrada:
+       no estaba en la cola, no estaba en Buscar, y el unico rastro era un
+       boton en OTRA fila. Una fila puede quedar inactiva; invisible, no. */
+    const l = cat.filter(p => norm(p.nom).includes(q)).slice(0, 60);
     if(!l.length){ r.innerHTML = '<div class="vacio">Sin resultados para «' + $("#q").value + '».</div>'; return; }
     r.insertAdjacentHTML("beforeend", '<h2 class="sec">' + l.length + ' resultado(s)</h2>');
     l.forEach(p => {
       const fila = filaProd(p);
       r.appendChild(fila);
+
+      /* Una fila absorbida no se cuenta ni se vende: se explica y se ofrece
+         deshacer. El texto dice DONDE fue a parar su stock, que es lo unico
+         que el necesita saber para quedarse tranquilo. */
+      if(p.fusion){
+        fila.style.opacity = ".62";
+        const q2 = cat.find(x => x.id === p.fusion);
+        const bx = document.createElement("div");
+        bx.className = "juntada";
+        bx.innerHTML = '<b>Esta fila se juntó con otra.</b> Su stock no se perdió: pasó a ' +
+          (q2 ? '«' + q2.nom + '»' + (q2.pres ? ' (' + q2.pres + ')' : '') +
+                ', que ahora tiene <b>' + (q2.stock || 0) + '</b> unidades.'
+              : 'la otra fila del mismo producto.');
+        r.appendChild(bx);
+        if(q2 && q2.desunir){
+          const bd = document.createElement("button");
+          bd.className = "des"; bd.style.margin = "0 0 10px";
+          bd.textContent = "Separarlas otra vez";
+          bd.onclick = () => {
+            if(!confirm("Vas a separar otra vez las filas de:\n\n" + p.nom +
+                        "\n\nCada una vuelve al stock que tenía. ¿Seguro?")) return;
+            desunir(q2); pintar();
+          };
+          r.appendChild(bd);
+        }
+        return;   /* sin caja de contar ni de vender: esta fila no esta activa */
+      }
+
       /* Contar o corregir, para CUALQUIER clase: el error de conteo no
          distingue de clases, y Buscar es el unico sitio que llega a un
          producto que ya salio de la cola. Va antes que la venta porque
@@ -1423,7 +1458,8 @@ function filaConteo(p){
       if(!confirm("Se van a juntar " + todos.length + " filas de:\n\n" + p.nom +
                   "\n\nQueda UNA con " + tot + " unidades y costo S/ " +
                   num(q.costo || 0) + ".\n\nLas otras quedan en 0 y marcadas, " +
-                  "no se borran.\n\n¿Seguro?"))
+                  "no se borran: las sigues viendo en BUSCAR y desde ahi puedes " +
+                  "separarlas otra vez.\n\n¿Seguro?"))
         return;
       fusionar(p, gem);
       vistaContar();
@@ -1845,7 +1881,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.20 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.21 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
