@@ -200,6 +200,8 @@ input[type=text],input[type=file],select{width:100%;padding:12px;border:1px soli
   padding:2px 7px;border-radius:6px;margin-left:6px;vertical-align:1px;white-space:nowrap}
 .edit{margin-top:9px;padding:10px;border:1px dashed var(--linea);border-radius:11px;
   background:var(--sup2)}
+.edit .tit{font-size:12.5px;color:var(--suave);margin:0 0 9px}
+.edit .tit b{color:var(--texto)}
 .edit label{display:block;font-size:10.5px;color:var(--suave);margin:0 0 4px}
 .edit input{width:100%;padding:10px;border:1px solid var(--linea);border-radius:10px;
   font-size:14px;font-family:inherit;background:var(--sup);color:var(--texto);margin-bottom:9px}
@@ -289,7 +291,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.21";
+const VERSION = "v0.22";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -1037,6 +1039,22 @@ function vistaBuscar(){
         r.appendChild(bx);
       }
 
+      /* Alta de lote: el caso real es "llego una caja con otra fecha". Va en
+         Buscar porque es donde el llega a cualquier producto, y en la fila
+         de conteo porque es donde esta cuando descubre la caja. */
+      const bl = document.createElement("button");
+      bl.className = "lapiz";
+      bl.style.margin = "-2px 0 10px";
+      bl.textContent = "➕ Otro lote de este producto";
+      bl.onclick = () => {
+        bl.style.display = "none";
+        const ed = editorLote(p, hecho => { if(hecho) pintar();
+                                            else { ed.remove(); bl.style.display = ""; } });
+        ed.style.margin = "0 0 10px";
+        bl.after(ed);
+      };
+      r.appendChild(bl);
+
       /* Buscar es el sitio donde se llega a CUALQUIER producto, tenga o no
          conteo pendiente. Por eso el lapiz tambien vive aqui. */
       const lap = document.createElement("button");
@@ -1520,6 +1538,19 @@ function filaConteo(p){
     const dif = val - (p.stockPrev !== undefined ? p.stockPrev : val);
     setTimeout(() => vistaContar(), 450);
   };
+  /* Con la caja en la mano es cuando descubre que hay otro lote. */
+  const bl = document.createElement("button");
+  bl.className = "lapiz";
+  bl.style.margin = "8px 0 0";
+  bl.textContent = "➕ Hay otro lote de este producto";
+  bl.onclick = () => {
+    bl.style.display = "none";
+    const ed = editorLote(p, hecho => { if(hecho) vistaContar();
+                                        else { ed.remove(); bl.style.display = ""; } });
+    bl.after(ed);
+  };
+  div.appendChild(bl);
+
   div.querySelector(".gu").onclick = guardar;
   div.querySelector(".ig").onclick = () => { qty.value = p.stock || 0; guardar(); };
   qty.onkeydown = e => { if(e.key === "Enter") guardar(); };
@@ -1539,6 +1570,88 @@ function registrarConteo(p, contado, fechaVenc){
   if(fechaVenc) p.venc = fechaVenc;
   grabar();
   pintarEstado();
+}
+
+/* ---- DAR DE ALTA OTRO LOTE (v0.22) ----------------------------------
+   El catalogo lleva UNA FILA POR LOTE. Hasta la v0.21 esas filas solo
+   podian nacer en la laptop: editar el CSV, cifrarlo, subirlo a GitHub y
+   volver a descargarlo. Cuando llega una caja nueva un martes cualquiera,
+   eso no pasa — y la mercaderia se queda fuera del inventario.
+
+   Tres decisiones:
+
+   1. El lote nuevo hereda TODO del producto (nombre, categoria, costo,
+      marca, presentacion, clase) y solo se le pregunta lo que de verdad
+      cambia entre lotes: **vencimiento, numero de lote y cuantos hay**.
+      Menos campos, menos abandono.
+   2. Nace **contado hoy**, con una linea de historial marcada `alta` y con
+      esperado = contado. Asi NO aparece como "sobrante" del dia: no es una
+      diferencia de conteo, es mercaderia que entro. La medida de merma
+      no se ensucia.
+   3. El Id es el del producto con sufijo -2, -3… igual que los que ya
+      genera el catalogo, y se comprueba que no exista.                    */
+function idLoteNuevo(p){
+  const base = String(p.id).replace(/-\d+$/, "");
+  let n = 2, id = base + "-" + n;
+  while(cat.some(x => x.id === id)){ n++; id = base + "-" + n; }
+  return id;
+}
+
+function altaLote(p, venc, lote, cantidad){
+  const q = {
+    id: idLoteNuevo(p), nom: p.nom, cat: p.cat, costo: p.costo || 0,
+    stock: cantidad, venc: venc, lote: lote, abc: p.abc || "C",
+    marca: p.marca || "", pres: p.pres || "", aviso: "",
+    visto: hoyISO(),
+    hist: [{f: hoyISO(), esp: cantidad, con: cantidad, alta: true}]
+  };
+  cat.push(q);
+  grabar(); pintarEstado();
+  return q;
+}
+
+/* El formulario. Vive donde el esta cuando descubre la caja: en la fila de
+   conteo y en Buscar. */
+function editorLote(p, alTerminar){
+  const box = document.createElement("div");
+  box.className = "edit";
+  box.innerHTML =
+    '<div class="tit">Otro lote de <b>' + p.nom + '</b></div>' +
+    '<label>Vence (dd/mm/aaaa)</label>' +
+    '<input type="text" class="vcin" inputmode="numeric" placeholder="dd/mm/aaaa" autocomplete="off">' +
+    '<label>N° de lote del envase</label>' +
+    '<input type="text" class="ltin" placeholder="el que dice la caja" ' +
+      'autocomplete="off" autocapitalize="characters">' +
+    '<label>¿Cuántas unidades hay en ESTE lote?</label>' +
+    '<input type="number" class="qtin" inputmode="numeric" min="0" placeholder="cantidad">' +
+    '<div class="fin"><button class="no">Cancelar</button><button class="ok">Agregar el lote</button></div>';
+  const vc = box.querySelector(".vcin");
+  mascaraFecha(vc);
+  box.querySelector(".no").onclick = () => { if(alTerminar) alTerminar(false); };
+  box.querySelector(".ok").onclick = () => {
+    const txt = vc.value.trim();
+    const venc = txt ? parseFecha(txt) : "";
+    if(txt && !venc)
+      return alert("La fecha no es válida.\n\nEscríbela como dd/mm/aaaa, por ejemplo 30/07/2028.");
+    const c = parseFloat(box.querySelector(".qtin").value);
+    if(isNaN(c) || c < 0) return alert("Escribe cuántas unidades hay en este lote.");
+    const lote = box.querySelector(".ltin").value.trim();
+    /* Si ya hay un lote con esa misma fecha, avisar ANTES: casi siempre
+       significa que es la misma caja y lo que toca es corregir el conteo
+       del lote que ya existe, no crear otra fila. */
+    const igual = lotesDe(p).filter(x => venc && x.venc === venc);
+    if(igual.length &&
+       !confirm("Ya tienes un lote de este producto que vence el mismo mes (" +
+                fmtFecha(venc) + ").\n\nSi es la MISMA caja, cancela y corrige el conteo " +
+                "de esa fila.\n\n¿Aun así quieres crear otro lote?"))
+      return;
+    const q = altaLote(p, venc, lote, c);
+    alert("Lote agregado: " + c + " unidades de\n\n" + p.nom +
+          (venc ? "\n\nvence " + fmtFecha(venc) : "") + (lote ? "\nlote " + lote : "") +
+          "\n\nQueda contado hoy, así que no te lo va a volver a pedir.");
+    if(alTerminar) alTerminar(true, q);
+  };
+  return box;
 }
 
 /* ---- CORREGIR UN CONTEO (v0.20) --------------------------------------
@@ -1881,7 +1994,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.21 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.22 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
