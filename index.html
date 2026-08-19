@@ -110,6 +110,21 @@ h2.sec:first-child{margin-top:0}
 .kpi.aviso{border-color:var(--ambar)}
 .kpi.aviso b{color:var(--ambar)}
 
+/* v0.23 — LAS TARJETAS SE TOCAN.
+   Su pedido: "quiero poder tocar un cuadro en el dashboard y que me lleve a
+   esa info detallada". Antes el numero estaba a la vista pero no habia forma
+   de ver QUE productos lo componian sin buscarlos uno por uno. */
+.kpi.tocable{cursor:pointer;position:relative;transition:transform .08s,border-color .15s}
+.kpi.tocable:active{transform:scale(.985)}
+.kpi.tocable::after{content:"ver ›";position:absolute;right:12px;top:12px;
+  font-size:10px;color:var(--suave);letter-spacing:.3px}
+.kpi.tocable:hover{border-color:var(--acento)}
+.volver{background:none;border:none;color:var(--acento);font-family:inherit;font-size:13px;
+  font-weight:650;cursor:pointer;padding:4px 0;margin-bottom:6px}
+.cabDet{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  margin:2px 0 12px;flex-wrap:wrap}
+.cabDet .tot{font-size:12px;color:var(--suave)}
+
 /* fila de producto */
 .prod{background:var(--sup);border:1px solid var(--linea);border-left:3px solid var(--c,var(--linea));
   border-radius:13px;padding:11px 13px;margin-bottom:7px;display:flex;gap:10px;
@@ -291,7 +306,7 @@ footer .v{display:inline-block;margin-top:6px;padding:3px 11px;border:1px solid 
 <script>
 /* ---- 2) COMPORTAMIENTO ---------------------------------------------- */
 
-const VERSION = "v0.22";
+const VERSION = "v0.23";
 
 /* ---------- CATALOGO CIFRADO -----------------------------------------
    El catalogo viaja DENTRO de la app, pero cifrado con AES-256-GCM.
@@ -654,19 +669,27 @@ function vistaResumen(){
   const vencidos = cat.filter(p => conStock(p) && p.venc && diasPara(p.venc) < 0);
   const d90 = cat.filter(p => { const d = diasPara(p.venc); return conStock(p) && d !== null && d >= 0 && d < 90; });
   const cero = cat.filter(p => !conStock(p));
+  const conStk = cat.filter(conStock);
   const vv = a => a.reduce((s,p) => s + valor(p), 0);
 
   v.innerHTML = '<h2 class="sec">Tu inventario hoy</h2>';
   const g = document.createElement("div"); g.className = "kpis";
-  const kpi = (t, val, sub, cls) =>
-    '<div class="kpi ' + (cls||"") + '"><small>' + t + '</small><b>' + val + '</b>' +
+  /* v0.23: cada tarjeta lleva su lista dentro. Una tarjeta sin productos NO se
+     hace tocable — abrir una pantalla vacia es peor que no poder abrirla. */
+  const kpi = (t, val, sub, cls, id) =>
+    '<div class="kpi ' + (cls||"") + (id ? " tocable" : "") + '"' + (id ? ' data-det="'+id+'"' : '') +
+    '><small>' + t + '</small><b>' + val + '</b>' +
     '<span style="font-size:11px;color:var(--suave)">' + sub + '</span></div>';
   g.innerHTML =
-    kpi("Valorizado", soles(tot), cat.length + " productos") +
-    kpi("Ya vencido", soles(vv(vencidos)), vencidos.length + " con stock", vencidos.length ? "alerta" : "") +
-    kpi("Vence en 90 días", soles(vv(d90)), d90.length + " productos", d90.length ? "aviso" : "") +
-    kpi("Sin stock", cero.length, "productos en cero");
+    kpi("Valorizado", soles(tot), cat.length + " productos", "", conStk.length ? "stock" : "") +
+    kpi("Ya vencido", soles(vv(vencidos)), vencidos.length + " con stock",
+        vencidos.length ? "alerta" : "", vencidos.length ? "vencidos" : "") +
+    kpi("Vence en 90 días", soles(vv(d90)), d90.length + " productos",
+        d90.length ? "aviso" : "", d90.length ? "d90" : "") +
+    kpi("Sin stock", cero.length, "productos en cero", "", cero.length ? "cero" : "");
   v.appendChild(g);
+  g.querySelectorAll("[data-det]").forEach(el =>
+    el.onclick = () => abrirDetalle(el.dataset.det));
 
   v.insertAdjacentHTML("beforeend", '<h2 class="sec">Dónde está tu dinero (ABC)</h2>');
   ["A","B","C"].forEach(k => {
@@ -687,6 +710,109 @@ function vistaResumen(){
     '<div class="nota"><b>Cómo leer esto:</b> la clase A son los productos donde está el 80% ' +
     'de tu dinero. Son los que hay que contar seguido. La clase C son 200 y pico de productos ' +
     'que juntos no llegan al 5% — contarlos cada semana sería regalar tu tiempo.</div>');
+}
+
+/* ══════════════════════════════════════════════════════════════════════
+   v0.23 — DETALLE DE UNA TARJETA
+   Su pedido: "doy click al recuadro de los que vencen en 90 dias y me los
+   trae todos a pantalla". Una sola vista generica sirve para las cuatro
+   tarjetas: cambia la lista y el orden, no la pantalla.
+   ══════════════════════════════════════════════════════════════════════ */
+let detalleQue = null;
+
+const DETALLES = {
+  stock: {
+    titulo: "Todo lo que tienes en estante",
+    nota: "Ordenado por plata en estante: arriba lo que mas pesa en tu inventario.",
+    lista: () => cat.filter(conStock).sort((a,b) => valor(b) - valor(a))
+  },
+  vencidos: {
+    titulo: "Ya vencido y todavia con stock",
+    nota: "Esto no se vende: se retira. La pantalla Vencen te lleva del retiro paso a paso.",
+    lista: () => cat.filter(p => conStock(p) && p.venc && diasPara(p.venc) < 0)
+                    .sort((a,b) => diasPara(a.venc) - diasPara(b.venc))
+  },
+  d90: {
+    titulo: "Vence dentro de 90 dias",
+    nota: "Lo mas cerca de vencer, arriba. Todavia hay tiempo de devolver al proveedor o " +
+          "sacarlo en promocion — despues ya no.",
+    lista: () => cat.filter(p => { const d = diasPara(p.venc);
+                                   return conStock(p) && d !== null && d >= 0 && d < 90; })
+                    .sort((a,b) => diasPara(a.venc) - diasPara(b.venc))
+  },
+  cero: {
+    titulo: "Sin stock — para planificar la compra",
+    nota: "Ordenado por clase y por costo: arriba lo de clase A, que es donde esta tu dinero. " +
+          "Que un producto este en cero no significa que haya que reponerlo: puede que lo " +
+          "dejaras de vender a proposito.",
+    lista: () => cat.filter(p => !conStock(p)).sort((a,b) => {
+      const o = {A:0, B:1, C:2};
+      const d = (o[a.abc] ?? 3) - (o[b.abc] ?? 3);
+      return d || (b.costo || 0) - (a.costo || 0);
+    })
+  }
+};
+
+function abrirDetalle(que){ detalleQue = que; ir("detalle"); }
+
+function vistaDetalle(){
+  const v = $("#vista"); v.innerHTML = "";
+  const d = DETALLES[detalleQue];
+  if(!d) return ir("resumen");
+  const l = d.lista();
+
+  const volver = document.createElement("button");
+  volver.className = "volver";
+  volver.textContent = "‹ Volver al resumen";
+  volver.onclick = () => ir("resumen");
+  v.appendChild(volver);
+
+  const val = l.reduce((s,p) => s + valor(p), 0);
+  v.insertAdjacentHTML("beforeend",
+    '<h2 class="sec">' + d.titulo + '</h2>' +
+    '<div class="cabDet"><span class="tot"><b>' + l.length + '</b> producto(s)' +
+    (val > 0 ? ' · ' + soles(val) + ' en estante' : '') + '</span></div>');
+
+  if(!l.length){
+    v.insertAdjacentHTML("beforeend", '<div class="nota">Nada aqui. Buena noticia.</div>');
+    return;
+  }
+
+  l.forEach(p => {
+    const dd = diasPara(p.venc);
+    const tr = franja(dd);
+    const fila = document.createElement("div");
+    fila.className = "prod";
+    fila.style.setProperty("--c", tr ? tr.c : "var(--linea)");
+    /* Cada linea dice lo que hace falta para DECIDIR, que cambia segun la
+       tarjeta: si es de vencimiento manda la fecha; si es de compra, el costo. */
+    const der = detalleQue === "cero"
+      ? '<b>' + soles(p.costo || 0) + '</b><span>costo unitario</span>'
+      : '<b>' + soles(valor(p)) + '</b><span>' + (p.stock || 0) + ' u</span>';
+    const sub = detalleQue === "cero"
+      ? (p.visto ? "Contado el " + p.visto : "Nunca contado")
+      : (dd === null ? "Sin fecha de vencimiento"
+                     : (dd < 0 ? "Vencio hace " + Math.abs(dd) + " dias"
+                               : "Vence en " + dd + " dias · " + (p.venc || "")));
+    fila.innerHTML =
+      '<div class="txt"><b><span class="pastilla abc' + (p.abc||"C") + '">' + (p.abc||"C") + '</span>' +
+      p.nom + '</b><span>' + sub + (p.lote ? " · lote " + p.lote : "") +
+      (p.marca ? " · " + p.marca : "") + '</span></div>' +
+      '<div class="der">' + der + '</div>';
+    v.appendChild(fila);
+  });
+
+  v.insertAdjacentHTML("beforeend", '<div class="nota">' + d.nota + '</div>');
+
+  /* Lo que NO se puede afirmar todavia, dicho donde toca decirlo. */
+  if(detalleQue === "cero")
+    v.insertAdjacentHTML("beforeend",
+      '<div class="nota"><b>Por que aqui no dice cual comprar primero:</b> para saber que ' +
+      'producto tiene mas salida hace falta medir consumo entre DOS conteos del mismo ' +
+      'producto, y hoy solo 5 de los ' + cat.length + ' llevan dos. La otra via seria la ' +
+      'pantalla <b>Vender</b> de esta misma app, que guarda cada salida — pero todavia no ' +
+      'esta en uso. En cuanto haya una de las dos, esta pantalla puede ordenarse por ' +
+      'rotacion de verdad y no por corazonada.</div>');
 }
 
 function vistaVencer(){
@@ -1976,9 +2102,13 @@ function importar(txt){
 
 /* ---- navegación ---- */
 const VISTAS = {resumen:vistaResumen, contar:vistaContar, vender:vistaVender,
-                vencer:vistaVencer, buscar:vistaBuscar, datos:vistaDatos};
+                vencer:vistaVencer, buscar:vistaBuscar, datos:vistaDatos,
+                detalle:vistaDetalle};
 function ir(v){
-  document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  /* 'detalle' no tiene boton propio en la barra: se deja marcado Resumen, que
+     es de donde se entra y a donde se vuelve. */
+  const marcar = (v === "detalle") ? "resumen" : v;
+  document.querySelectorAll(".nav button").forEach(b => b.classList.toggle("on", b.dataset.v === marcar));
   VISTAS[v]();
   window.scrollTo(0, 0);
 }
@@ -1994,7 +2124,7 @@ ir(cat.length ? "resumen" : "datos");
 <footer>
   Desarrollado por <b>Ing. Ángel Ybarra Rivas</b><br>
   PROMEDIC · Rodríguez de Mendoza, Amazonas<br>
-  <span class="v">Inventario v0.22 · partes 1 y 2 de 3</span>
+  <span class="v">Inventario v0.23 · partes 1 y 2 de 3</span>
 </footer>
 </body>
 </html>
